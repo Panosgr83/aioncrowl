@@ -584,9 +584,28 @@ async def save_session_messages(full_key: str, data: dict):
     path = _session_file(full_key)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        existing = []
+        if os.path.exists(path):
+            with open(path) as f:
+                try:
+                    existing = json.load(f).get("messages", [])
+                except:
+                    existing = []
+        incoming = data.get("messages", [])
+        # Merge: keep existing + append incoming that are not duplicates
+        existing_ids = set()
+        for m in existing:
+            key = f"{m.get('role','')}|{m.get('content','')[:200]}|{m.get('ts','')}"
+            existing_ids.add(key)
+        merged = list(existing)
+        for m in incoming:
+            key = f"{m.get('role','')}|{m.get('content','')[:200]}|{m.get('ts','')}"
+            if key not in existing_ids:
+                merged.append(m)
+                existing_ids.add(key)
         with open(path, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return {"status": "saved"}
+            json.dump({"messages": merged}, f, indent=2, ensure_ascii=False)
+        return {"status": "saved", "count": len(merged)}
     except Exception as e:
         raise HTTPException(400, f"Save error: {e}")
 
