@@ -41,8 +41,14 @@ function App() {
   const [showCollab, setShowCollab] = useState(true)
   const [thinkingEvents, setThinkingEvents] = useState([])
   const [compactView, setCompactView] = useState(false)
+  const [showKnowledge, setShowKnowledge] = useState(false)
+  const [kbStats, setKbStats] = useState(null)
+  const [kbQuery, setKbQuery] = useState('')
+  const [kbResults, setKbResults] = useState([])
+  const [kbTab, setKbTab] = useState('browse')
 
   const fileInputRef = useRef(null)
+  const kbFileRef = useRef(null)
   const wsRef = useRef(null)
   const wsCollabRef = useRef(null)
   const chatRef = useRef(null)
@@ -443,6 +449,102 @@ function App() {
     </div>
   ) : null
 
+  const knowledgePanel = showKnowledge ? (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowKnowledge(false)}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900">
+          <span className="text-xs font-medium text-amber-400">🧠 Knowledge Base</span>
+          <button onClick={()=>setShowKnowledge(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+        </div>
+        <div className="flex border-b border-gray-800 text-xs">
+          {['browse','search','upload'].map(tab=>(
+            <button key={tab} onClick={()=>setKbTab(tab)}
+              className={`px-4 py-2 ${kbTab===tab?'text-amber-400 border-b border-amber-400':'text-gray-500 hover:text-gray-300'}`}>
+              {tab==='browse'?'📚 Browse':tab==='search'?'🔍 Search':'📤 Upload'}
+            </button>
+          ))}
+        </div>
+        {kbTab === 'browse' && (
+          <div className="p-4 text-xs">
+            <div className="flex justify-between items-center mb-3">
+              <span className="text-gray-400">Project: <span className="text-amber-400">{currentProject}</span> ({kbStats?.project_chunks||0} chunks)</span>
+              <span className="text-gray-500">Global: {kbStats?.global_chunks||0} chunks</span>
+            </div>
+            {(!kbStats?.sources||kbStats.sources.length===0) ? (
+              <div className="text-center py-8 text-gray-600">No indexed documents. Write files or upload to populate.</div>
+            ) : (
+              <div className="space-y-2">
+                {kbStats.sources.map((src,i)=>(
+                  <div key={i} className="flex items-center justify-between bg-gray-800/50 rounded px-3 py-2">
+                    <span className="text-gray-300">📄 {src}</span>
+                    <span className="text-gray-600 text-[9px]">indexed</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4">
+              <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json())}catch(_){}}}
+                className="text-[10px] text-gray-500 hover:text-gray-300">↻ Refresh</button>
+            </div>
+          </div>
+        )}
+        {kbTab === 'search' && (
+          <div className="p-4 text-xs">
+            <div className="flex gap-2 mb-3">
+              <input value={kbQuery} onChange={e=>setKbQuery(e.target.value)}
+                onKeyDown={async e=>{if(e.key==='Enter'){try{const r=await fetch(`${API}/api/knowledge/query`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:kbQuery,project:currentProject})});const d=await r.json();setKbResults(d.results||[])}catch(_){}}}}
+                placeholder="Search knowledge base..."
+                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-300 focus:outline-none focus:border-amber-500 text-[11px]"/>
+              <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/query`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:kbQuery,project:currentProject})});const d=await r.json();setKbResults(d.results||[])}catch(_){}}}
+                className="text-[10px] px-3 py-1.5 bg-amber-600/20 text-amber-400 rounded hover:bg-amber-600/30">Search</button>
+            </div>
+            {kbResults.length===0 ? (
+              <div className="text-center py-8 text-gray-600">{kbQuery?'No results':'Enter a query and press Search'}</div>
+            ) : (
+              <div className="space-y-3">
+                {kbResults.map((r,i)=>(
+                  <div key={i} className="bg-gray-800/50 rounded p-3 border border-gray-700/50">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-amber-400">{r.metadata?.source||r.metadata?.path?.split('/').pop()||'unknown'}</span>
+                      <span className="text-gray-600 text-[9px]">{r.collection==='global_kb'?'📦 global':'🌐 '+currentProject} · score: {r.score?.toFixed(3)}</span>
+                    </div>
+                    <div className="text-gray-300 font-mono text-[10px] leading-relaxed line-clamp-3">{r.content}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {kbTab === 'upload' && (
+          <div className="p-4 text-xs">
+            <div className="border-2 border-dashed border-gray-700 rounded-lg p-8 text-center hover:border-amber-500/50 transition-colors cursor-pointer"
+              onClick={()=>kbFileRef.current?.click()}
+              onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('border-amber-500')}}
+              onDragLeave={e=>{e.currentTarget.classList.remove('border-amber-500')}}
+              onDrop={async e=>{e.preventDefault();e.currentTarget.classList.remove('border-amber-500');const file=e.dataTransfer.files[0];if(file){await uploadKbFile(file)}}}>
+              <div className="text-3xl mb-2">📤</div>
+              <div className="text-gray-400 mb-1">Drop file here or click to browse</div>
+              <div className="text-gray-600 text-[9px]">.md .txt .json .py .js .html .css .csv</div>
+              <input ref={kbFileRef} type="file" accept=".md,.txt,.json,.py,.js,.jsx,.ts,.tsx,.html,.css,.csv,.yml,.yaml,.xml,.ini,.cfg" className="hidden"
+                onChange={async e=>{const file=e.target.files[0];if(file){await uploadKbFile(file);e.target.value=''}}}/>
+            </div>
+            <div className="mt-3 text-gray-500 text-[9px]">Uploaded text files are auto-indexed into the current project KB. Agents can then search them with query_kb.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null
+
+  const uploadKbFile = async (file) => {
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      await fetch(`${API}/api/agents/${activeAgent}/upload`, {method:'POST',body:form})
+      const r = await fetch(`${API}/api/knowledge/stats?project=${currentProject}`)
+      setKbStats(await r.json())
+    } catch(_) {}
+  }
+
   const agentThinks = (ev) => {
     const icon = agents.find(a=>a.id===ev.agent_id)?.icon||'🤖'
     const colors = {started:'border-blue-800/30 bg-blue-900/10',
@@ -506,6 +608,8 @@ function App() {
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-violet-300 hover:bg-gray-800">⚡ Perf</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/activity`);const d=await r.json();setActivityLog(d.entries||[]);setShowActivity(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-emerald-300 hover:bg-gray-800">📋 Activity</button>
+          <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
+            className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-amber-300 hover:bg-gray-800">🧠 KB</button>
         </div>
       </div>
 
@@ -847,6 +951,7 @@ function App() {
       </div>
       {activityPanel}
       {perfPanel}
+      {knowledgePanel}
     </div>
   )
 }
