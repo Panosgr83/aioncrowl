@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const API = 'http://127.0.0.1:9789'
+const API = 'http://127.0.0.1:9790'
 
 import SettingsPanel from './components/SettingsPanel'
 import FileBrowser from './components/FileBrowser'
@@ -160,7 +160,7 @@ function App() {
 
   const connectWS = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
-    const ws = new WebSocket(`ws://127.0.0.1:9789/ws/chat`)
+    const ws = new WebSocket(`ws://127.0.0.1:9790/ws/chat`)
     wsRef.current = ws; setWsStatus('connecting')
     ws.onopen = () => { setConnected(true); setWsStatus('connected') }
     ws.onmessage = (e) => {
@@ -221,7 +221,7 @@ function App() {
   useEffect(() => {
     let closed = false
     function connectCollab() {
-      const ws = new WebSocket(`ws://127.0.0.1:9789/ws/collab`)
+      const ws = new WebSocket(`ws://127.0.0.1:9790/ws/collab`)
       wsCollabRef.current = ws
       ws.onmessage = (e) => {
         try {
