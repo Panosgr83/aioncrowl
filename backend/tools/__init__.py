@@ -5,6 +5,40 @@ AION_DIR = os.path.expanduser("~/AION")
 MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
 PERF_START = {}
 MEMORY_LOCK = threading.Lock()
+ACTIVITY_FILE = os.path.join(AION_DIR, "MEMORY", "activity.jsonl")
+
+def log_activity(agent_id, tool, args, result, success=True):
+    try:
+        os.makedirs(os.path.dirname(ACTIVITY_FILE), exist_ok=True)
+        entry = {
+            "ts": datetime.now().isoformat(),
+            "agent": agent_id,
+            "tool": tool,
+            "args": str(args)[:200],
+            "result": str(result)[:300],
+            "success": success,
+        }
+        with open(ACTIVITY_FILE, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except:
+        pass
+
+def read_activity(limit=100):
+    try:
+        if not os.path.exists(ACTIVITY_FILE):
+            return []
+        entries = []
+        with open(ACTIVITY_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except:
+                        pass
+        return entries[-limit:]
+    except:
+        return []
 
 def store_collab_memory(agent_id, task, result):
     mem = load_memory()
@@ -352,6 +386,20 @@ def find_uploaded_file(fname):
     return None
 
 def execute_tool(name, args, agent_id="agent"):
+    try:
+        result = _execute_tool_impl(name, args, agent_id)
+        log_activity(agent_id, name, args, result, True)
+        return result
+    except subprocess.TimeoutExpired:
+        result = "Command timed out"
+        log_activity(agent_id, name, args, result, False)
+        return result
+    except Exception as e:
+        result = f"Error in {name}: {str(e)}"
+        log_activity(agent_id, name, args, result, False)
+        return result
+
+def _execute_tool_impl(name, args, agent_id="agent"):
     try:
         if name == "read_file":
             p = resolve_path(args["path"], agent_id)
@@ -783,7 +831,7 @@ def execute_tool(name, args, agent_id="agent"):
             return (f"Το αίτημα #{req_id} εγκρίθηκε. Ο agent {agent_id} ξεκίνησε την ανάλυση.\n\n"
                     f"Αποτέλεσμα:\n{full_result[:2000]}")
         return f"Unknown tool: {name}"
-    except subprocess.TimeoutExpired:
-        return "Command timed out"
+    except subprocess.TimeoutExpired as e:
+        raise e
     except Exception as e:
-        return f"Error in {name}: {str(e)}"
+        raise e

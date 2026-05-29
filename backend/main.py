@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key, suggest_engine_for, record_engine_perf
-from tools import TOOL_DEFINITIONS, execute_tool
+from tools import TOOL_DEFINITIONS, execute_tool, read_activity
 from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
 from collaboration import bus
@@ -689,6 +689,10 @@ async def get_performance():
 async def get_engine_performance():
     from engine import get_engine_perf, get_engine_status
     return {"stats": get_engine_perf(), "engines": get_engine_status()}
+
+@app.get("/api/activity")
+async def get_activity(limit: int = Query(100)):
+    return {"entries": read_activity(limit)}
 
 @app.get("/api/files")
 async def list_files(path: str = ""):
