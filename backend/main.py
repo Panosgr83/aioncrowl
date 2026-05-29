@@ -3,8 +3,9 @@ import json, os, asyncio, time, uuid, subprocess
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -43,6 +44,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+AIONCLAW_API_KEY = os.environ.get("AIONCLAW_API_KEY", "")
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if AIONCLAW_API_KEY:
+        if request.url.path.startswith("/api/"):
+            client_key = request.headers.get("x-api-key", "")
+            if client_key != AIONCLAW_API_KEY:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 SYSTEM_PROMPT = """Είσαι ο AION CEO Agent, το κεντρικό AI σύστημα της AION Web Solutions.
 Απαντάς στα Ελληνικά (με αγγλικούς τεχνικούς όρους όπου χρειάζεται).

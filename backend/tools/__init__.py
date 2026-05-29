@@ -1,9 +1,10 @@
-import json, os, subprocess, requests, time, asyncio
+import json, os, subprocess, requests, time, asyncio, threading
 from datetime import datetime
 
 AION_DIR = os.path.expanduser("~/AION")
 MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
 PERF_START = {}
+MEMORY_LOCK = threading.Lock()
 
 def store_collab_memory(agent_id, task, result):
     mem = load_memory()
@@ -20,23 +21,25 @@ def store_collab_memory(agent_id, task, result):
     save_memory(mem)
 
 def load_memory():
-    try:
-        os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-        if os.path.exists(MEMORY_FILE):
-            with open(MEMORY_FILE) as f:
-                return json.load(f)
-    except:
-        pass
-    return {}
+    with MEMORY_LOCK:
+        try:
+            os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
+            if os.path.exists(MEMORY_FILE):
+                with open(MEMORY_FILE) as f:
+                    return json.load(f)
+        except:
+            pass
+        return {}
 
 def save_memory(data):
-    try:
-        os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return "OK"
-    except Exception as e:
-        return f"σφάλμα: {e}"
+    with MEMORY_LOCK:
+        try:
+            os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
+            with open(MEMORY_FILE, "w") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return "OK"
+        except Exception as e:
+            return f"σφάλμα: {e}"
 
 def _get_facts(mem):
     return mem.get("facts", {})
@@ -389,10 +392,18 @@ def execute_tool(name, args, agent_id="agent"):
             return f"Search error: {resp.status_code} {resp.text[:200]}"
         elif name == "web_fetch":
             fmt = args.get("format", "markdown")
-            resp = requests.get(args["url"], timeout=30, headers={"User-Agent": "AIONCLAW/1.0"})
-            if resp.status_code == 200:
-                return resp.text[:5000]
-            return f"Fetch error: {resp.status_code}"
+            last_err = ""
+            for attempt in range(3):
+                resp = requests.get(args["url"], timeout=30, headers={"User-Agent": "AIONCLAW/1.0"})
+                if resp.status_code == 200:
+                    return resp.text[:5000]
+                if resp.status_code in (429, 503):
+                    wait = 2 ** attempt
+                    time.sleep(wait)
+                    last_err = f"{resp.status_code} (retry {attempt+1}/3 after {wait}s)"
+                else:
+                    return f"Fetch error: {resp.status_code}"
+            return f"Fetch error: {last_err}"
         elif name == "remember":
             mem = load_memory()
             facts = _ensure_facts(mem)
