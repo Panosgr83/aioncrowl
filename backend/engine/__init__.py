@@ -43,9 +43,9 @@ ENGINES = [
     {"id": "gemini", "name": "Gemini 2.5 Flash", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash",
      "priority": 8, "supports_tools": True, "max_tokens": 8192, "cooldown_until": 0, "headers": {},
      "capability": "high", "speed_rating": "medium", "suitable_for": ["general", "reasoning", "tools"]},
-    {"id": "ollama", "name": "Ollama Llama 3.2 3B", "base_url": "http://127.0.0.1:11434/v1", "model": "llama3.2:3b",
-     "priority": 9, "supports_tools": True, "max_tokens": 4096, "cooldown_until": 0, "headers": {},
-     "capability": "low", "speed_rating": "medium", "suitable_for": ["simple", "quick_tasks"]},
+    {"id": "ollama", "name": "Ollama Qwen 2.5 14B", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:14b",
+     "priority": 3, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {},
+     "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
 ]
 
 def get_api_key(engine_id):

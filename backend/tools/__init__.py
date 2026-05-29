@@ -295,10 +295,13 @@ TOOL_DEFINITIONS = [
     },
 ]
 
-def resolve_path(path):
-    p = os.path.expanduser(path)
+def resolve_path(path, agent_id=None):
+    p = os.path.realpath(os.path.expanduser(path))
     if not os.path.isabs(p):
-        p = os.path.join(AION_DIR, p)
+        p = os.path.realpath(os.path.join(AION_DIR, p))
+    allowed = [os.path.realpath(AION_DIR), os.path.realpath(os.path.expanduser("~/AION"))]
+    if not any(p.startswith(root + "/") or p == root for root in allowed):
+        raise PermissionError(f"Access denied: {p} is outside AION directory")
     return p
 
 def find_uploaded_file(fname):
@@ -317,7 +320,7 @@ def find_uploaded_file(fname):
 def execute_tool(name, args, agent_id="agent"):
     try:
         if name == "read_file":
-            p = resolve_path(args["path"])
+            p = resolve_path(args["path"], agent_id)
             if not os.path.exists(p):
                 found = find_uploaded_file(os.path.basename(args["path"]))
                 if found:
@@ -337,21 +340,29 @@ def execute_tool(name, args, agent_id="agent"):
             with open(p) as f:
                 return f.read()
         elif name == "write_file":
-            p = resolve_path(args["path"])
+            p = resolve_path(args["path"], agent_id)
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "w") as f:
                 f.write(args["content"])
             return f"Written: {p}"
         elif name == "list_dir":
-            p = resolve_path(args["path"])
+            p = resolve_path(args["path"], agent_id)
             if not os.path.isdir(p):
                 return f"Not a directory: {p}"
             items = os.listdir(p)
             return "\n".join(sorted(items))
         elif name == "run_command":
+            ALLOWED_AGENTS = ("ceo", "dev", "analytics")
+            if agent_id not in ALLOWED_AGENTS:
+                return f"❌ Ο agent '{agent_id}' δεν έχει δικαίωμα εκτέλεσης εντολών. Μόνο: {', '.join(ALLOWED_AGENTS)}"
+            BLOCKED_PATTERNS = ["rm -rf /", "dd if=", "mkfs", "> /dev/", ":(){ :|:& };:", "chmod 777", "sudo ", "> /etc/"]
+            command = args["command"]
+            for pattern in BLOCKED_PATTERNS:
+                if pattern in command:
+                    return f"❌ Blocked: '{pattern}' δεν επιτρέπεται"
             timeout = args.get("timeout", 30)
             result = subprocess.run(
-                args["command"], shell=True, capture_output=True, text=True, timeout=timeout
+                command, shell=True, capture_output=True, text=True, timeout=timeout
             )
             out = result.stdout[-3000:] if len(result.stdout) > 3000 else result.stdout
             err = result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr

@@ -144,6 +144,15 @@ class AgentContext:
         if role == "user":
             self.message_count += 1
 
+MAX_CONTEXT_MSGS = 12
+
+def trim_messages(messages):
+    """Keep system prompt + last N messages for context efficiency."""
+    system = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+    trimmed = non_system[-MAX_CONTEXT_MSGS:]
+    return system + trimmed
+
 def run_agent(ctx, engine_override=""):
     if engine_override:
         engine = next((e for e in ENGINES if e["id"] == engine_override), None)
@@ -164,7 +173,8 @@ def run_agent(ctx, engine_override=""):
         for attempt in range(2):
             try:
                 t0 = time.time()
-                resp = call_engine(engine, ctx.messages, tools=TOOL_DEFINITIONS if ctx.tools_enabled else None, stream=False)
+                msgs = trim_messages(ctx.messages)
+                resp = call_engine(engine, msgs, tools=TOOL_DEFINITIONS if ctx.tools_enabled else None, stream=False)
                 t1 = time.time()
                 data = resp.json()
                 choice = data["choices"][0]
@@ -189,8 +199,7 @@ def run_agent(ctx, engine_override=""):
                         ctx.add_message("tool", result, tool_call_id=tc_id)
                         tool_results.append({"name": func_name, "result": result[:200]})
 
-                    t2 = time.time()
-                    final_resp = call_engine(engine, ctx.messages, stream=False)
+                    final_resp = call_engine(engine, trim_messages(ctx.messages), stream=False)
                     t3 = time.time()
                     record_engine_perf(engine_id, t3 - t2, True)
                     final_data = final_resp.json()
@@ -237,7 +246,7 @@ async def chat(req: ChatRequest):
         active = get_active_engines()
         if active:
             try:
-                await summarize_conversation(call_engine, active[0], ctx.messages, ctx.agent_id)
+                await summarize_conversation(call_engine, active[0], trim_messages(ctx.messages), ctx.agent_id)
             except:
                 pass
 
@@ -581,6 +590,21 @@ async def approvals_reject(request_id: str):
     return {"ok": True}
 
 SESSION_DIR = os.path.join(AION_DIR, "aionclaw", "sessions")
+SESSION_CACHE = {}  # full_key -> {"messages": list, "ts": float}
+SESSION_CACHE_TTL = 1800  # 30 minutes
+
+def _cache_get(full_key):
+    entry = SESSION_CACHE.get(full_key)
+    if entry and time.time() - entry["ts"] < SESSION_CACHE_TTL:
+        return entry["data"]
+    SESSION_CACHE.pop(full_key, None)
+    return None
+
+def _cache_set(full_key, data):
+    SESSION_CACHE[full_key] = {"data": data, "ts": time.time()}
+
+def _cache_invalidate(full_key):
+    SESSION_CACHE.pop(full_key, None)
 
 def _session_file(full_key):
     safe = full_key.replace(":", "_").replace("/", "_")
@@ -609,7 +633,6 @@ async def save_session_messages(full_key: str, data: dict):
                 except:
                     existing = []
         incoming = data.get("messages", [])
-        # Merge: keep existing + append incoming that are not duplicates
         existing_ids = set()
         for m in existing:
             key = f"{m.get('role','')}|{m.get('content','')[:200]}|{m.get('ts','')}"
@@ -620,19 +643,27 @@ async def save_session_messages(full_key: str, data: dict):
             if key not in existing_ids:
                 merged.append(m)
                 existing_ids.add(key)
+        payload = {"messages": merged}
         with open(path, "w") as f:
-            json.dump({"messages": merged}, f, indent=2, ensure_ascii=False)
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        _cache_set(full_key, payload)
         return {"status": "saved", "count": len(merged)}
     except Exception as e:
         raise HTTPException(400, f"Save error: {e}")
 
 @app.get("/api/sessions/{full_key}/load")
 async def load_session_messages(full_key: str):
+    cached = _cache_get(full_key)
+    if cached:
+        return cached
     path = _session_file(full_key)
     try:
         if os.path.exists(path):
             with open(path) as f:
-                return json.load(f)
+                data = json.load(f)
+                _cache_set(full_key, data)
+                # Return full history for UI display
+                return data
         return {"messages": []}
     except Exception as e:
         return {"messages": [], "error": str(e)}
@@ -741,7 +772,7 @@ async def websocket_chat(ws: WebSocket):
                 engine_used = engine["id"]
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
 
-                resp = call_engine(engine, ctx.messages, tools=TOOL_DEFINITIONS if tools_enabled else None, stream=True)
+                resp = call_engine(engine, trim_messages(ctx.messages), tools=TOOL_DEFINITIONS if tools_enabled else None, stream=True)
 
                 full_content = ""
                 collected_tools = []
@@ -828,7 +859,7 @@ async def websocket_chat(ws: WebSocket):
                         "ts": datetime.now().isoformat(),
                     })
                     t2 = time.time()
-                    final_resp = call_engine(engine, ctx.messages, stream=True, max_tokens=1024)
+                    final_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024)
                     final_content = ""
                     for line in final_resp.iter_lines():
                         if not line:
@@ -854,7 +885,7 @@ async def websocket_chat(ws: WebSocket):
 
                 if needs_summary(ctx.messages):
                     try:
-                        await summarize_conversation(call_engine, engine, ctx.messages, ctx.agent_id)
+                        await summarize_conversation(call_engine, engine, trim_messages(ctx.messages), ctx.agent_id)
                     except:
                         pass
                 bus.status(agent_id, False, "has_response")
