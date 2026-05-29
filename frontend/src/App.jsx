@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const API = 'http://127.0.0.1:9789'
 
+import SettingsPanel from './components/SettingsPanel'
+import FileBrowser from './components/FileBrowser'
+import LeadsPanel from './components/LeadsPanel'
+
 function statusLabel(s) {
   if (!s || s === 'idle') return ''
   if (s === 'writing') return '● Γράφει...'
