@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key
+from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key, suggest_engine_for, record_engine_perf
 from tools import TOOL_DEFINITIONS, execute_tool
 from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
@@ -23,6 +23,14 @@ active_connections = set()
 @asynccontextmanager
 async def lifespan(app):
     print("AIONCLAW server starting...")
+    # Initialize default projects
+    pdata = _load_project()
+    default_projects = ["angelus_pastry", "angeliki_savvidaki", "melisanuts", "mike_artistic_team"]
+    for p in default_projects:
+        if p not in pdata["projects"]:
+            pdata["projects"].append(p)
+    _save_project(pdata)
+    print(f"Projects: {pdata['projects']}")
     yield
     print("AIONCLAW server stopped.")
 
@@ -137,28 +145,33 @@ class AgentContext:
             self.message_count += 1
 
 def run_agent(ctx, engine_override=""):
-    active = get_active_engines()
-    if not active:
-        return {"response": "Δεν υπάρχει διαθέσιμο engine. Έλεγξε API keys και engine status.", "engine_used": "none", "tool_calls": []}
-
     if engine_override:
         engine = next((e for e in ENGINES if e["id"] == engine_override), None)
         if not engine:
             return {"response": f"Engine '{engine_override}' not found", "engine_used": "none", "tool_calls": []}
         engines_to_try = [engine]
     else:
-        engines_to_try = active
+        suggested = suggest_engine_for("general", needs_tools=ctx.tools_enabled)
+        engines_to_try = get_active_engines()
+        if suggested and suggested in engines_to_try:
+            engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
+
+    if not engines_to_try:
+        return {"response": "Δεν υπάρχει διαθέσιμο engine. Έλεγξε API keys και engine status.", "engine_used": "none", "tool_calls": []}
 
     last_error = ""
     for engine in engines_to_try:
         for attempt in range(2):
             try:
+                t0 = time.time()
                 resp = call_engine(engine, ctx.messages, tools=TOOL_DEFINITIONS if ctx.tools_enabled else None, stream=False)
+                t1 = time.time()
                 data = resp.json()
                 choice = data["choices"][0]
                 msg = choice["message"]
 
                 engine_id = engine["id"]
+                record_engine_perf(engine_id, t1 - t0, True)
 
                 if msg.get("tool_calls"):
                     ctx.add_message("assistant", msg.get("content") or "", tool_calls=msg["tool_calls"])
@@ -176,7 +189,10 @@ def run_agent(ctx, engine_override=""):
                         ctx.add_message("tool", result, tool_call_id=tc_id)
                         tool_results.append({"name": func_name, "result": result[:200]})
 
+                    t2 = time.time()
                     final_resp = call_engine(engine, ctx.messages, stream=False)
+                    t3 = time.time()
+                    record_engine_perf(engine_id, t3 - t2, True)
                     final_data = final_resp.json()
                     final_text = final_data["choices"][0]["message"].get("content", "")
                     ctx.add_message("assistant", final_text)
@@ -188,6 +204,7 @@ def run_agent(ctx, engine_override=""):
 
             except Exception as e:
                 last_error = str(e)
+                record_engine_perf(engine["id"], 0, False)
                 if "rate limit" in last_error.lower() or "too large" in last_error.lower():
                     mark_engine(engine["id"], "rate_limited", 60)
                     break
@@ -620,6 +637,16 @@ async def load_session_messages(full_key: str):
     except Exception as e:
         return {"messages": [], "error": str(e)}
 
+@app.get("/api/performance")
+async def get_performance():
+    from performance import get_report
+    return get_report()
+
+@app.get("/api/engine-perf")
+async def get_engine_performance():
+    from engine import get_engine_perf, get_engine_status
+    return {"stats": get_engine_perf(), "engines": get_engine_status()}
+
 @app.get("/api/files")
 async def list_files(path: str = ""):
     base = os.path.expanduser(path) if path else AION_DIR
@@ -682,12 +709,26 @@ async def websocket_chat(ws: WebSocket):
 
         ctx.add_message("user", data.get("message", ""))
         bus.status(agent_id, True, "writing")
+        ws_start_time = time.time()
 
-        active_engines = get_active_engines()
+        # Broadcast agent thinking on chat start
+        bus.broadcast({
+            "type": "agent_thinking",
+            "agent_id": agent_id,
+            "status": "started",
+            "thought": f"🤔 {agent_id}: επεξεργάζεται το μήνυμά σας...",
+            "ts": datetime.now().isoformat(),
+        })
+
         if engine_override:
-            engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or active_engines
+            engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or []
+            if not engines_to_try:
+                engines_to_try = get_active_engines()
         else:
-            engines_to_try = active_engines
+            suggested = suggest_engine_for("general", needs_tools=tools_enabled)
+            engines_to_try = get_active_engines()
+            if suggested and suggested in engines_to_try:
+                engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
 
         last_error = ""
         response_text = ""
@@ -696,6 +737,7 @@ async def websocket_chat(ws: WebSocket):
 
         for engine in engines_to_try:
             try:
+                t0 = time.time()
                 engine_used = engine["id"]
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
 
@@ -725,6 +767,8 @@ async def websocket_chat(ws: WebSocket):
                             finish = chunk.get("choices", [{}])[0].get("finish_reason", "")
                         except:
                             continue
+                t1 = time.time()
+                record_engine_perf(engine["id"], t1 - t0, True)
 
                 if collected_tools:
                     combined_tools = []
@@ -747,17 +791,44 @@ async def websocket_chat(ws: WebSocket):
                     ctx.add_message("assistant", full_content, tool_calls=combined_tools)
                     await ws_send({"type": "tool_calls", "tool_calls": combined_tools})
 
-                    for tc in combined_tools:
+                    total_tools = len(combined_tools)
+                    for ti, tc in enumerate(combined_tools):
                         func_name = tc.get("function", {}).get("name", "")
                         func_args = json.loads(tc.get("function", {}).get("arguments", "{}")) if tc.get("function", {}).get("arguments") else {}
                         tc_id = tc.get("id", "")
                         await ws_send({"type": "tool_start", "name": func_name, "args": func_args})
-                        result = execute_tool(func_name, func_args, ctx.agent_id)
+                        # Broadcast progress + thinking via collab bus
+                        progress_pct = min(int((ti + 1) / total_tools * 95), 95)
+                        bus.broadcast({
+                            "type": "task_progress",
+                            "agent_id": agent_id,
+                            "status": "running",
+                            "progress": progress_pct,
+                            "message": f"🔧 {func_name} ({ti+1}/{total_tools})",
+                            "ts": datetime.now().isoformat(),
+                        })
+                        bus.broadcast({
+                            "type": "agent_thinking",
+                            "agent_id": agent_id,
+                            "status": "thinking",
+                            "thought": f"💭 {agent_id}: εκτελεί {func_name} ({ti+1}/{total_tools})",
+                            "ts": datetime.now().isoformat(),
+                        })
+                        result = await asyncio.to_thread(execute_tool, func_name, func_args, ctx.agent_id)
                         await ws_send({"type": "tool_result", "name": func_name, "result": result[:500]})
                         ctx.add_message("tool", result, tool_call_id=tc_id)
                         tool_calls_made.append({"name": func_name, "result": result[:200]})
 
-                    final_resp = call_engine(engine, ctx.messages, stream=True)
+                    # Broadcast synthesizing
+                    bus.broadcast({
+                        "type": "agent_thinking",
+                        "agent_id": agent_id,
+                        "status": "synthesizing",
+                        "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα εργαλείων...",
+                        "ts": datetime.now().isoformat(),
+                    })
+                    t2 = time.time()
+                    final_resp = call_engine(engine, ctx.messages, stream=True, max_tokens=1024)
                     final_content = ""
                     for line in final_resp.iter_lines():
                         if not line:
@@ -774,6 +845,7 @@ async def websocket_chat(ws: WebSocket):
                                     await ws_send({"type": "delta", "content": d["content"]})
                             except:
                                 continue
+                    record_engine_perf(engine["id"], time.time() - t2, True)
                     response_text = final_content
                     ctx.add_message("assistant", final_content)
                 else:
@@ -787,6 +859,23 @@ async def websocket_chat(ws: WebSocket):
                         pass
                 bus.status(agent_id, False, "has_response")
                 bus.broadcast({
+                    "type": "agent_thinking",
+                    "agent_id": agent_id,
+                    "status": "complete",
+                    "thought": f"✅ {agent_id} ολοκλήρωσε την απάντηση",
+                    "ts": datetime.now().isoformat(),
+                })
+                # Complete progress
+                if tool_calls_made:
+                    bus.broadcast({
+                        "type": "task_progress",
+                        "agent_id": agent_id,
+                        "status": "complete",
+                        "progress": 100,
+                        "message": f"✅ {agent_id} completed",
+                        "ts": datetime.now().isoformat(),
+                    })
+                bus.broadcast({
                     "type": "agent_chat",
                     "agent_id": agent_id,
                     "session_id": session_id.split(":", 1)[-1] if ":" in session_id else session_id,
@@ -796,10 +885,17 @@ async def websocket_chat(ws: WebSocket):
                     ]
                 })
                 await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})
+                # Log performance
+                try:
+                    from performance import log_performance
+                    perf_duration = time.time() - ws_start_time
+                    log_performance(agent_id, data.get("message",""), perf_duration, engine_used, True, tool_calls=len(tool_calls_made))
+                except: pass
                 break
 
             except Exception as e:
                 last_error = str(e)
+                record_engine_perf(engine["id"], 0, False)
                 error_lower = str(e).lower()
                 if "rate limit" in error_lower or "too large" in error_lower:
                     mark_engine(engine["id"], "rate_limited", 60)
@@ -810,6 +906,13 @@ async def websocket_chat(ws: WebSocket):
                 continue
         else:
             bus.status(agent_id, False, "failure")
+            bus.broadcast({
+                "type": "agent_thinking",
+                "agent_id": agent_id,
+                "status": "error",
+                "thought": f"❌ {agent_id} απέτυχε: {last_error[:100]}",
+                "ts": datetime.now().isoformat(),
+            })
             await ws_send({"type": "error", "message": f"Σφάλμα σε όλα τα engines: {last_error}"})
 
     except WebSocketDisconnect:

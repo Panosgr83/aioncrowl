@@ -26,14 +26,17 @@ export default function LeadsPanel({ onClose }) {
       ) : (
         <div className="flex flex-col gap-1">
           {leads.slice(0, 50).map((lead, i) => (
-            <div key={lead.id||i} className="bg-gray-800/40 rounded p-2 border border-gray-800">
+            <div key={lead.id||i||lead.name} className="bg-gray-800/40 rounded p-2 border border-gray-800">
               <div className="flex items-center justify-between">
                 <span className="text-gray-200 font-medium truncate">{lead.name||lead.company||'Unknown'}</span>
-                {lead.status && <span className={`text-[9px] px-1 py-0.5 rounded ${lead.status === 'active' ? 'bg-green-900/40 text-green-300' : lead.status === 'new' ? 'bg-blue-900/40 text-blue-300' : 'bg-gray-700 text-gray-400'}`}>{lead.status}</span>}
+                {lead.status && <span className={`text-[9px] px-1 py-0.5 rounded-full ${lead.status === 'qualified' ? 'bg-green-900/40 text-green-300' : lead.status === 'incoming' ? 'bg-blue-900/40 text-blue-300' : lead.status === 'contacted' ? 'bg-amber-900/40 text-amber-300' : 'bg-gray-700 text-gray-400'}`}>{lead.status}</span>}
               </div>
-              {lead.email && <div className="text-gray-500 text-[9px] mt-0.5">{lead.email}</div>}
-              {lead.phone && <div className="text-gray-500 text-[9px]">{lead.phone}</div>}
-              {lead.notes && <div className="text-gray-600 text-[9px] mt-0.5 line-clamp-2">{lead.notes}</div>}
+              {lead.industry && <div className="text-gray-500 text-[9px] mt-0.5">🏢 {lead.industry}</div>}
+              {lead.location && <div className="text-gray-500 text-[9px]">📍 {lead.location}</div>}
+              {lead.serviceNeeded && <div className="text-gray-500 text-[9px]">🛠 {lead.serviceNeeded}</div>}
+              {lead.onlinePresence && <div className="text-gray-600 text-[9px]">🌐 {lead.onlinePresence}</div>}
+              {lead.source && <div className="text-gray-600 text-[9px]">📡 {lead.source}</div>}
+              {lead.date && <div className="text-gray-600 text-[9px]">📅 {lead.date}</div>}
             </div>
           ))}
           {leads.length > 50 && <div className="text-center text-gray-600 text-[9px]">+{leads.length-50} more</div>}

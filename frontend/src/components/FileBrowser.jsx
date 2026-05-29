@@ -40,13 +40,20 @@ export default function FileBrowser({ onClose }) {
           <div key={a.id} className="mb-2">
             <div className="text-gray-500 uppercase font-medium text-[10px] mb-1">{a.icon} {a.name}</div>
             <div className="flex flex-col gap-1">
-              {files.map(f => (
-                <div key={typeof f === 'string' ? f : f.name} className="flex items-center justify-between bg-gray-800/40 rounded p-1.5 group">
-                  <span className="text-gray-300 truncate text-[10px]">{typeof f === 'string' ? f : f.name}</span>
-                  <button onClick={() => deleteFile(a.id, typeof f === 'string' ? f : f.name)}
-                    className="text-gray-600 hover:text-red-400 transition-colors text-[9px] opacity-0 group-hover:opacity-100">✕</button>
+              {files.map(f => {
+                const fname = typeof f === 'string' ? f : f.name
+                const fsize = typeof f === 'string' ? null : f.size
+                return (
+                <div key={fname} className="flex items-center justify-between bg-gray-800/40 rounded p-1.5 group">
+                  <div className="flex-1 min-w-0">
+                    <span className="text-gray-300 truncate text-[10px] block">{fname}</span>
+                    {fsize && <span className="text-gray-600 text-[8px]">{(fsize/1024).toFixed(1)} KB</span>}
+                  </div>
+                  <button onClick={() => deleteFile(a.id, fname)}
+                    className="text-gray-600 hover:text-red-400 transition-colors text-[9px] opacity-0 group-hover:opacity-100 shrink-0">✕</button>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )

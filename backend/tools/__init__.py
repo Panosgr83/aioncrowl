@@ -3,6 +3,7 @@ from datetime import datetime
 
 AION_DIR = os.path.expanduser("~/AION")
 MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
+PERF_START = {}
 
 def store_collab_memory(agent_id, task, result):
     mem = load_memory()
@@ -205,7 +206,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "ceo"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent", "ceo"],
                         "description": "Ποιος agent θα λάβει το μήνυμα"
                     },
                     "message": {"type": "string", "description": "Το μήνυμα προς τον agent"},
@@ -225,7 +226,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance"],
+                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
                         "description": "Σε ποιον agent να σταλεί το αρχείο"
                     },
                     "file_path": {"type": "string", "description": "Απόλυτο path του αρχείου προς αποστολή"},
@@ -253,7 +254,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
                         "description": "Ποιος agent θα εκτελέσει την εργασία"
                     },
                     "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
@@ -440,10 +441,19 @@ def execute_tool(name, args, agent_id="agent"):
         elif name == "get_time":
             return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         elif name == "delegate_to_agent":
+            from agents import AGENTS
             from collaboration import bus, run_sub_agent, save_to_agent_session
+            from performance import get_eta
             agent_id = args["agent_id"]
+            known_ids = {a["id"] for a in AGENTS}
+            if agent_id not in known_ids:
+                available = ", ".join(sorted(known_ids))
+                return f"❌ Ο agent '{agent_id}' ΔΕΝ υπάρχει στο σύστημα. Διαθέσιμοι agents: {available}. Χρησιμοποίησε list_agents για να δεις την ομάδα."
             task = args["task"]
             context = args.get("context", "")
+            estimated_seconds = get_eta(agent_id)
+            started_at = datetime.now().isoformat()
+            PERF_START[f"delegate_{agent_id}"] = time.time()
             bus.status(agent_id, True, "writing")
             bus.log("ceo", agent_id, "delegate", f"Ανάθεση: {task[:200]}...")
             # Progress: start
@@ -452,17 +462,33 @@ def execute_tool(name, args, agent_id="agent"):
                 "agent_id": agent_id,
                 "status": "started",
                 "progress": 0,
-                "message": f"🚀 {agent_id} ξεκινά...",
+                "message": f"🚀 {agent_id} ξεκινά... (~{estimated_seconds}s)",
+                "estimated_seconds": estimated_seconds,
+                "remaining_seconds": estimated_seconds,
+                "started_at": started_at,
+                "ts": datetime.now().isoformat(),
+            })
+            bus.broadcast({
+                "type": "agent_thinking",
+                "agent_id": agent_id,
+                "status": "started",
+                "thought": f"🚀 {agent_id}: ξεκινά εργασία (εκτίμ. {estimated_seconds}s)",
+                "estimated_seconds": estimated_seconds,
+                "started_at": started_at,
                 "ts": datetime.now().isoformat(),
             })
             result = run_sub_agent(agent_id, task, context)
+            duration = time.time() - PERF_START.pop(f"delegate_{agent_id}", time.time())
             # Progress: done
             bus.broadcast({
                 "type": "task_progress",
                 "agent_id": agent_id,
                 "status": "complete",
                 "progress": 100,
-                "message": f"✅ {agent_id} ολοκλήρωσε",
+                "message": f"✅ {agent_id} ολοκλήρωσε ({duration:.1f}s)",
+                "estimated_seconds": estimated_seconds,
+                "duration_s": round(duration, 1),
+                "started_at": started_at,
                 "ts": datetime.now().isoformat(),
             })
             bus.log(agent_id, "ceo", "result", result[:500])
@@ -479,16 +505,35 @@ def execute_tool(name, args, agent_id="agent"):
                     {"role": "assistant", "content": result[:2000], "_aid": agent_id, "_sid": "default"}
                 ]
             })
-            return f"Αποτέλεσμα από {agent_id}:\n\n{result}"
+            return f"Αποτέλεσμα από {agent_id} ({duration:.1f}s):\n\n{result}"
         elif name == "send_to_agent":
+            from agents import AGENTS
             from collaboration import bus, run_sub_agent, save_to_agent_session
+            from performance import get_eta
             to_agent = args["agent_id"]
+            known_ids = {a["id"] for a in AGENTS}
+            if to_agent not in known_ids:
+                available = ", ".join(sorted(known_ids))
+                return f"❌ Ο agent '{to_agent}' ΔΕΝ υπάρχει στο σύστημα. Διαθέσιμοι agents: {available}. Χρησιμοποίησε list_agents για να δεις την ομάδα."
             msg = args["message"]
             ctx_extra = args.get("context", "")
             task_with_context = f"{msg}\n\nContext: {ctx_extra}" if ctx_extra else msg
+            estimated_seconds = get_eta(to_agent)
+            started_at = datetime.now().isoformat()
+            PERF_START[f"send_{to_agent}"] = time.time()
             bus.status(to_agent, True, "writing")
             bus.log("ceo", to_agent, "forward", f"Μήνυμα: {msg[:200]}...")
+            bus.broadcast({
+                "type": "agent_thinking",
+                "agent_id": to_agent,
+                "status": "started",
+                "thought": f"📨 {to_agent}: επεξεργάζεται μήνυμα (εκτίμ. {estimated_seconds}s)",
+                "estimated_seconds": estimated_seconds,
+                "started_at": started_at,
+                "ts": datetime.now().isoformat(),
+            })
             result = run_sub_agent(to_agent, task_with_context)
+            duration = time.time() - PERF_START.pop(f"send_{to_agent}", time.time())
             bus.status(to_agent, False, "has_response")
             save_to_agent_session(to_agent, "default", f"Από CEO: {msg}", result)
             bus.broadcast({
@@ -501,10 +546,15 @@ def execute_tool(name, args, agent_id="agent"):
                 ]
             })
             bus.log(to_agent, "ceo", "reply", result[:500])
-            return f"Απάντηση από {to_agent}:\n\n{result}"
+            return f"Απάντηση από {to_agent} ({duration:.1f}s):\n\n{result}"
         elif name == "send_file_to_agent":
+            from agents import AGENTS
             from collaboration import bus
             to_agent = args["agent_id"]
+            known_ids = {a["id"] for a in AGENTS} | {"ceo"}
+            if to_agent not in known_ids:
+                available = ", ".join(sorted(known_ids))
+                return f"❌ Ο agent '{to_agent}' ΔΕΝ υπάρχει. Διαθέσιμοι: {available}."
             src = resolve_path(args["file_path"])
             if not os.path.exists(src):
                 found = find_uploaded_file(os.path.basename(args["file_path"]))
@@ -546,12 +596,13 @@ def execute_tool(name, args, agent_id="agent"):
                 lines.append(f"     Εργαλεία: {tools_list}")
             return "\n".join(lines)
         elif name == "request_approval":
-            from approval import create as create_approval
-            from collaboration import bus
+            from approval import create as create_approval, approve as approve_req
+            from collaboration import bus, run_sub_agent, save_to_agent_session
             summary = args["summary"]
             details = args.get("details", "")
             req = create_approval(agent_id, summary, details)
-            # Broadcast to UI and CEO
+            # Auto-approve immediately — no waiting
+            approved = approve_req(req["id"], "system")
             bus.broadcast({
                 "type": "approval_request",
                 "id": req["id"],
@@ -560,11 +611,34 @@ def execute_tool(name, args, agent_id="agent"):
                 "summary": summary,
                 "details": details[:500],
                 "ts": req["ts"],
+                "auto_approved": True,
             })
-            return (f"✅ Αίτημα έγκρισης #{req['id']} στάλθηκε.\n"
-                    f"Περίληψη: {summary}\n\n"
-                    f"Τώρα δώσε μια σύντομη απάντηση και περίμενε έγκριση. "
-                    f"Όταν εγκριθεί, θα συνεχίσεις με την πλήρη ανάλυση.")
+            bus.broadcast({
+                "type": "approval_result",
+                "request_id": req["id"],
+                "status": "approved",
+                "auto_approved": True,
+                "ts": datetime.now().isoformat(),
+            })
+            # Continue with full analysis
+            full_result = run_sub_agent(agent_id,
+                f"✅ Αίτημα έγκρισης #{req['id']} ΕΓΚΡΙΘΗΚΕ ΑΥΤΟΜΑΤΑ.\n"
+                f"Θέμα: {summary}\n\n"
+                f"Συνέχισε ΤΩΡΑ με την πλήρη ανάλυση όπως είχες προγραμματίσει. "
+                f"Γράψε λεπτομερώς και εκτενώς.")
+            save_to_agent_session(agent_id, "default",
+                f"✅ Αυτόμ. έγκριση #{req['id']} για: {summary}", full_result)
+            bus.broadcast({
+                "type": "agent_chat",
+                "agent_id": agent_id,
+                "session_id": "default",
+                "exchange": [
+                    {"role": "user", "content": f"✅ Αυτόμ. έγκριση #{req['id']} — {summary}", "_aid": agent_id, "_sid": "default"},
+                    {"role": "assistant", "content": full_result[:3000], "_aid": agent_id, "_sid": "default"},
+                ]
+            })
+            return (f"✅ Αίτημα #{req['id']} εγκρίθηκε αυτόματα.\n\n"
+                    f"Αποτέλεσμα:\n{full_result[:2000]}")
         elif name == "approve_request":
             from approval import approve as approve_req
             from approval import get_all
