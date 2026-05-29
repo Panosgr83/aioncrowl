@@ -270,6 +270,37 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "parallel_delegate",
+            "description": "ΑΝΑΘΕΣΕ εργασίες σε ΠΟΛΛΟΥΣ agents ταυτόχρονα. Χρησιμοποίησέ το όταν θέλεις πολλοί agents να δουλέψουν παράλληλα (π.χ. dev + security + analytics μαζί). Οι agents τρέχουν ταυτόχρονα και επιστρέφουν όλα τα αποτελέσματα.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "delegations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent_id": {
+                                    "type": "string",
+                                    "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                                    "description": "Ποιος agent θα εκτελέσει την εργασία"
+                                },
+                                "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
+                                "context": {"type": "string", "description": "Πρόσθετες πληροφορίες context (προαιρετικό)"}
+                            },
+                            "required": ["agent_id", "task"]
+                        },
+                        "description": "Λίστα από εργασίες προς εκτέλεση παράλληλα"
+                    },
+                    "synthesize": {"type": "boolean", "description": "Αν θέλεις να συνθέσεις τα αποτελέσματα σε ενιαία απάντηση (true) ή να τα επιστρέψεις ξεχωριστά (false, default)"}
+                },
+                "required": ["delegations"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "request_approval",
             "description": "ΖΗΤΑ έγκριση για μακροσκελή απάντηση. Χρησιμοποίησέ το όταν πρέπει να γράψεις εκτενή ανάλυση (>500 λέξεις). Το αίτημα πάει στον χρήστη ΚΑΙ στον CEO. Περίμενε έγκριση πριν συνεχίσεις.",
             "parameters": {
@@ -528,6 +559,63 @@ def execute_tool(name, args, agent_id="agent"):
                 ]
             })
             return f"Αποτέλεσμα από {agent_id} ({duration:.1f}s):\n\n{result}"
+        elif name == "parallel_delegate":
+            from agents import AGENTS
+            from collaboration import bus, run_sub_agent, save_to_agent_session
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            delegations = args["delegations"]
+            synthesize = args.get("synthesize", False)
+            known_ids = {a["id"] for a in AGENTS}
+            validated = []
+            for d in delegations:
+                aid = d["agent_id"]
+                if aid not in known_ids:
+                    return f"❌ Ο agent '{aid}' ΔΕΝ υπάρχει στο σύστημα. Διαθέσιμοι: {', '.join(sorted(known_ids))}"
+                validated.append((aid, d["task"], d.get("context", "")))
+            bus.log("ceo", ", ".join(a for a,_,_ in validated), "parallel_delegate", f"Παράλληλη ανάθεση σε {len(validated)} agents")
+            total = len(validated)
+            results = {}
+            with ThreadPoolExecutor(max_workers=total) as pool:
+                fut_map = {}
+                for aid, task, ctx in validated:
+                    bus.status(aid, True, "writing")
+                    bus.broadcast({
+                        "type": "agent_thinking",
+                        "agent_id": aid,
+                        "status": "started",
+                        "thought": f"🚀 {aid}: ξεκινά παράλληλα με {total} agents"
+                    })
+                    fut = pool.submit(run_sub_agent, aid, task, ctx)
+                    fut_map[fut] = (aid, task)
+                for fut in as_completed(fut_map):
+                    aid, task = fut_map[fut]
+                    try:
+                        result = fut.result(timeout=300)
+                        results[aid] = result
+                        bus.status(aid, False, "has_response")
+                        bus.broadcast({
+                            "type": "agent_thinking",
+                            "agent_id": aid,
+                            "status": "complete",
+                            "thought": f"✅ {aid} ολοκλήρωσε παράλληλα"
+                        })
+                        store_collab_memory(aid, task, result)
+                        save_to_agent_session(aid, "default", f"Παράλληλο από CEO: {task}", result)
+                    except Exception as e:
+                        results[aid] = f"❌ Σφάλμα: {e}"
+                        bus.broadcast({
+                            "type": "agent_thinking",
+                            "agent_id": aid,
+                            "status": "error",
+                            "thought": f"❌ {aid} απέτυχε: {str(e)[:100]}"
+                        })
+            if synthesize:
+                combined = "## Παράλληλα Αποτελέσματα\n\n"
+                for aid, r in results.items():
+                    combined += f"### {aid}\n{r[:2000]}\n\n"
+                return combined
+            parts = [f"**{aid}** ({len(r)} chars): {r[:500]}" for aid, r in results.items()]
+            return f"Παράλληλη εκτέλεση {len(results)} agents:\n" + "\n---\n".join(parts)
         elif name == "send_to_agent":
             from agents import AGENTS
             from collaboration import bus, run_sub_agent, save_to_agent_session
