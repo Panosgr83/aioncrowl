@@ -361,6 +361,21 @@ TOOL_DEFINITIONS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_kb",
+            "description": "Αναζήτησε στο Knowledge Base του project. Επιστρέφει σχετικά αποσπάσματα από αρχεία και σημειώσεις που έχουν αποθηκευτεί στο project ή στο global knowledge base.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Ερώτημα αναζήτησης (π.χ. 'brand guidelines', 'API endpoints', 'προσφορές')"},
+                    "project": {"type": "string", "description": "Project name (προαιρετικό, default το τρέχον project)"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
 ]
 
 def resolve_path(path, agent_id=None):
@@ -426,6 +441,13 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "w") as f:
                 f.write(args["content"])
+            # Auto-index into knowledge base
+            try:
+                from kb import index_file, _get_current_project
+                project = _get_current_project()
+                index_file(project, p, agent_id)
+            except:
+                pass
             return f"Written: {p}"
         elif name == "list_dir":
             p = resolve_path(args["path"], agent_id)
@@ -830,6 +852,12 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             })
             return (f"Το αίτημα #{req_id} εγκρίθηκε. Ο agent {agent_id} ξεκίνησε την ανάλυση.\n\n"
                     f"Αποτέλεσμα:\n{full_result[:2000]}")
+        elif name == "query_kb":
+            from kb import query_knowledge, format_kb_results
+            q = args["query"]
+            project = args.get("project", "")
+            results = query_knowledge(project=project if project else None, query=q)
+            return format_kb_results(results, q)
         return f"Unknown tool: {name}"
     except subprocess.TimeoutExpired as e:
         raise e

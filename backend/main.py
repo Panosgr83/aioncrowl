@@ -352,8 +352,18 @@ async def upload_agent_file(agent_id: str, file: UploadFile = File(...)):
     file_path = os.path.join(dir_path, file.filename)
     with open(file_path, "wb") as f:
         f.write(content)
+    # Auto-index text files into KB
+    TEXT_EXT = {".txt", ".md", ".json", ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".csv", ".yml", ".yaml", ".xml", ".ini", ".cfg", ".env"}
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext in TEXT_EXT:
+        try:
+            from kb import index_file, _get_current_project
+            project = _get_current_project()
+            index_file(project, file_path, agent_id)
+        except Exception as e:
+            print(f"KB auto-index error: {e}")
     print(f"Uploaded: {file_path} ({len(content)} bytes)")
-    return {"status": "uploaded", "filename": file.filename, "path": file_path, "size": len(content)}
+    return {"status": "uploaded", "filename": file.filename, "path": file_path, "size": len(content), "indexed": ext in TEXT_EXT}
 
 @app.get("/api/agents/{agent_id}/files")
 async def list_agent_files(agent_id: str):
@@ -693,6 +703,39 @@ async def get_engine_performance():
 @app.get("/api/activity")
 async def get_activity(limit: int = Query(100)):
     return {"entries": read_activity(limit)}
+
+@app.post("/api/knowledge/query")
+async def knowledge_query(data: dict):
+    from kb import query_knowledge, format_kb_results
+    q = data.get("query", "")
+    project = data.get("project", "")
+    top_k = data.get("top_k", 5)
+    if not q:
+        raise HTTPException(400, "query is required")
+    results = query_knowledge(project=project or None, query=q, top_k=top_k)
+    formatted = format_kb_results(results, q)
+    return {"results": results, "formatted": formatted, "count": len(results)}
+
+@app.post("/api/knowledge/reindex")
+async def knowledge_reindex(data: dict = {}):
+    from kb import reindex_project
+    project = data.get("project", "")
+    from kb import _get_current_project
+    p = project or _get_current_project()
+    result = reindex_project(p)
+    return result
+
+@app.get("/api/knowledge/stats")
+async def knowledge_stats(project: str = ""):
+    from kb import get_collection_stats, _get_current_project
+    p = project or _get_current_project()
+    return get_collection_stats(p)
+
+@app.delete("/api/knowledge/{project}")
+async def knowledge_delete(project: str):
+    from kb import delete_collection
+    ok = delete_collection(project)
+    return {"status": "deleted" if ok else "not_found"}
 
 @app.get("/api/files")
 async def list_files(path: str = ""):

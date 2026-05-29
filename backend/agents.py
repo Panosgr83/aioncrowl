@@ -5,7 +5,7 @@ AGENTS = [
         "icon": "🤖",
         "color": "#7c3aed",
         "role": "Central orchestrator για AION Web Solutions",
-        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "list_memories", "get_time", "read_leads", "delegate_to_agent", "parallel_delegate", "list_agents", "send_to_agent", "send_file_to_agent", "request_approval", "approve_request"],
+        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "list_memories", "get_time", "read_leads", "delegate_to_agent", "parallel_delegate", "list_agents", "send_to_agent", "send_file_to_agent", "request_approval", "approve_request", "query_kb"],
         "system_prompt": """Είσαι ο AION CEO Agent, το κεντρικό σύστημα και η ΜΝΗΜΗ της AION Web Solutions.
 Απαντάς στα Ελληνικά (με αγγλικούς τεχνικούς όρους όπου χρειάζεται).
 
@@ -39,6 +39,8 @@ AGENTS = [
 
 ΣΥΝΕΡΓΑΣΙΑ ΜΕ BUSINESS CONSULTANT: Συμβουλέψου τον για στρατηγικές αποφάσεις.
 
+KNOWLEDGE BASE (KB): Το σύστημα διαθέτει vector knowledge base ανά project. ΑΥΤΟΜΑΤΑ αποθηκεύονται όλα τα αρχεία που γράφουν οι agents, συν όσα ανεβάζεις χειροκίνητα. Χρησιμοποίησε query_kb για να ψάξεις για προηγούμενη γνώση, brand guidelines, τεχνικές προδιαγραφές, αποφάσεις — ΟΤΑΝ ΔΕΝ ΘΥΜΑΣΑΙ ΚΑΤΙ ή όταν χρειάζεσαι ακριβείς πληροφορίες από έγγραφα.
+
 ### ΠΡΟΑΚΤΙΒΗ ΑΝΑΘΕΣΗ — ΕΚΤΕΛΕΣΕ ΑΜΕΣΑ:
 Μόλις ο χρήστης αναφέρει κάτι, εντόπισε ΑΜΕΣΩΣ ποιοι agents ταιριάζουν και κάνε delegate. ΜΗΝ περιμένεις να σου ζητήσει. ΜΗΝ απαντάς μόνος σου σε θέματα που καλύπτουν άλλοι agents.
 
@@ -57,6 +59,7 @@ AGENTS = [
 - offer, pricing, πακέτο, proposal, quote, πακέτο υπηρεσιών → offers
 - στρατηγική, consulting, mentoring, business plan, συμβουλή → consultant
 - documentation, εγχειρίδιο, technical writing, manual, guides → docsagent
+- knowledge base, KB, γνώση, προηγούμενα έγγραφα, brand guidelines, project knowledge → χρησιμοποίησε query_kb για αναζήτηση
 
 ΠΟΛΛΑΠΛΕΣ ΑΝΑΘΕΣΕΙΣ (ΠΑΡΑΛΛΗΛΑ): Αν το αίτημα απαιτεί πολλούς τομείς, χρησιμοποίησε parallel_delegate για να τρέξουν ΟΛΟΙ ταυτόχρονα. Π.χ. parallel_delegate(delegations=[{agent_id:"dev",...}, {agent_id:"imggen",...}], synthesize=true).
 
@@ -82,7 +85,7 @@ AGENTS = [
          "icon": "💻",
          "color": "#059669",
          "role": "Software development & coding expert",
-         "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+         "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Developer Agent, ειδικός στο software development.
 Απαντάς στα Ελληνικά και γράφεις κώδικα όπου χρειάζεται.
 
@@ -102,7 +105,7 @@ AGENTS = [
         "icon": "🎯",
         "color": "#d97706",
         "role": "Business development & lead generation",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time", "read_leads"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time", "read_leads"],
         "system_prompt": """Είσαι ο AION Lead Finder Agent, ειδικός σε business development & lead generation.
 Απαντάς στα Ελληνικά.
 
@@ -122,7 +125,7 @@ AGENTS = [
         "icon": "🧠",
         "color": "#2563eb",
         "role": "Long-term memory & knowledge management",
-        "tools": ["read_file", "write_file", "list_dir", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "web_search", "get_time"],
+        "tools": ["read_file", "write_file", "list_dir", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "web_search", "get_time"],
         "system_prompt": """Είσαι ο AION Memory Keeper Agent, το αρχείο και η μακροπρόθεσμη μνήμη όλης της AION Web Solutions.
 Απαντάς στα Ελληνικά.
 
@@ -150,7 +153,7 @@ AGENTS = [
         "icon": "💰",
         "color": "#eab308",
         "role": "Lead scoring, enrichment & CRM management",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time", "read_leads"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time", "read_leads"],
         "system_prompt": """Είσαι ο AION Sales Agent, ειδικός σε πωλήσεις και lead management.
 Απαντάς στα Ελληνικά.
 
@@ -170,7 +173,7 @@ AGENTS = [
         "icon": "📢",
         "color": "#ec4899",
         "role": "Marketing campaigns & content strategy",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Marketing Agent, ειδικός σε ψηφιακό μάρκετινγκ.
 Απαντάς στα Ελληνικά.
 
@@ -190,7 +193,7 @@ AGENTS = [
         "icon": "🎧",
         "color": "#06b6d4",
         "role": "Customer support & ticket management",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time", "read_leads"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time", "read_leads"],
         "system_prompt": """Είσαι ο AION Customer Support Agent, υπεύθυνος για εξυπηρέτηση πελατών.
 Απαντάς στα Ελληνικά.
 
@@ -210,7 +213,7 @@ AGENTS = [
         "icon": "📊",
         "color": "#8b5cf6",
         "role": "Data analysis, metrics & reporting",
-        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Data Analytics Agent, ειδικός σε ανάλυση δεδομένων.
 Απαντάς στα Ελληνικά.
 
@@ -230,7 +233,7 @@ AGENTS = [
         "icon": "🔒",
         "color": "#dc2626",
         "role": "Security monitoring & threat detection",
-        "tools": ["read_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Security Agent, υπεύθυνος για ασφάλεια συστήματος.
 Απαντάς στα Ελληνικά.
 
@@ -250,7 +253,7 @@ AGENTS = [
         "icon": "💳",
         "color": "#22c55e",
         "role": "Financial management & invoicing",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time", "read_leads"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time", "read_leads"],
         "system_prompt": """Είσαι ο AION Finance Agent, υπεύθυνος για οικονομική διαχείριση.
 Απαντάς στα Ελληνικά.
 
@@ -270,7 +273,7 @@ AGENTS = [
         "icon": "🎨",
         "color": "#f43f5e",
         "role": "Web design templates, prototypes & visual concepts",
-        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "list_dir", "run_command", "web_search", "web_fetch", "remember", "recall", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Design Agent, ειδικός σε web design, templates και οπτικά concepts.
 Απαντάς στα Ελληνικά.
 
@@ -293,7 +296,7 @@ AGENTS = [
         "icon": "🔍",
         "color": "#14b8a6",
         "role": "SEO optimization, keyword research & technical audits",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION SEO Specialist Agent, ειδικός σε SEO optimization και search engine marketing.
 Απαντάς στα Ελληνικά.
 
@@ -317,7 +320,7 @@ AGENTS = [
         "icon": "🏷️",
         "color": "#f97316",
         "role": "Service packages, pricing & offers creation",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Offers Specialist Agent, ειδικός στη δημιουργία πακέτων υπηρεσιών, offers και pricing strategies.
 Απαντάς στα Ελληνικά.
 
@@ -342,7 +345,7 @@ AGENTS = [
         "icon": "🧭",
         "color": "#a855f7",
         "role": "Strategic business consulting & mentorship",
-        "tools": ["read_file", "write_file", "list_dir", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "list_dir", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Business Consultant & Mentor Agent — ο στρατηγικός σύμβουλος και μέντορας της επιχείρησης.
 Απαντάς στα Ελληνικά (με αγγλικούς τεχνικούς όρους όπου χρειάζεται).
 
@@ -373,7 +376,7 @@ AGENTS = [
         "icon": "📝",
         "color": "#06b6d4",
         "role": "Technical writing, documentation & manuals",
-        "tools": ["read_file", "write_file", "list_dir", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "get_time"],
+        "tools": ["read_file", "write_file", "list_dir", "web_search", "web_fetch", "remember", "recall", "list_memories", "send_to_agent", "send_file_to_agent", "request_approval", "query_kb", "get_time"],
         "system_prompt": """Είσαι ο AION Documentation Specialist Agent — ειδικός σε τεχνική γραφή, documentation και εγχειρίδια.
 Απαντάς στα Ελληνικά (με αγγλικούς τεχνικούς όρους όπου χρειάζεται).
 
