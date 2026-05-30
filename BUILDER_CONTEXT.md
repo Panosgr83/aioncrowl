@@ -154,15 +154,13 @@
 
 ## Git Log (τελευταίες εγγραφές)
 ```
+7b1ae58 add: auto engine fallback + memory recall cache 30s
+578a80e add: Agent Console + real-time comm log + full timestamps
+c1ac29f ui: steps 4-8 polish — tool bar, system tiers, wave typing, drawer tabs, input bar
+dda4181 add: runtime tool permission filtering + opencode.jsonc
 a53d5c2 add PM Agent + projects.json with auto-create and deadline parsing
 a28978e add reasoning instructions to all 16 agents
 e04abc3 add Content Agent + read_leads to offers & consultant
-c494152 KB Frontend (Browse/Search/Upload)
-da52b02 Knowledge Base (numpy RAG)
-0ecb438 Audit Trail
-4a0c77e Phase 3: parallel_delegate
-6bdafab Phase 2: memory lock, web_fetch retry, auth
-e0cbbbb Phase 1: security sandbox, session cache, context trimming
 ```
 
 ## Εκκρεμή (pending tasks)
@@ -170,12 +168,14 @@ e0cbbbb Phase 1: security sandbox, session cache, context trimming
 | # | Τι | Αρχεία | Status |
 |---|----|--------|--------|
 | 1 | ~~PM Agent~~ | (ολοκληρώθηκε) | **completed** (a53d5c2) |
-| 2 | UI Redesign Steps 2‑8 | App.jsx, index.css | pending |
+| 2 | UI Redesign Steps 2‑8 | App.jsx, index.css | **completed** |
 | 3 | Runtime tool permission enforcement | main.py / agents.py (TOOL_DEFINITIONS filtering) | **completed** |
 | 4 | OpenCode project configuration (opencode.jsonc) | root του repo | **completed** |
-| 5 | main.py split (router files) | main.py → routers/ | postponed |
-| 6 | pytest suite | tests/ | postponed |
-| 7 | Structured output (guardrails) | agents.py | postponed |
+| 5 | Agent Console + real-time comm log | App.jsx, collaboration.py | **completed** |
+| 6 | Auto engine fallback + memory cache | engine/__init__.py, tools/__init__.py | **completed** |
+| 7 | main.py split (router files) | main.py → routers/ | postponed |
+| 8 | pytest suite | tests/ | postponed |
+| 9 | Structured output (guardrails) | agents.py | postponed |
 
 ### Λεπτομέρειες για τα νέα εκκρεμή
 
