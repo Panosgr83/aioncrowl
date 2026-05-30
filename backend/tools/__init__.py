@@ -249,6 +249,28 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "save_lead",
+            "description": "Αποθήκευσε ένα νέο lead στο CRM database. ΧΡΗΣΙΜΟΠΟΙΗΣΕ αυτό το tool ΑΦΟΥ κάνεις web_search για πραγματικά leads. ΠΡΕΠΕΙ να δώσεις πραγματικά στοιχεία που βρήκες από web search, όχι επινοημένα.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Όνομα επιχείρησης (υποχρεωτικό)"},
+                    "website": {"type": "string", "description": "Ιστοσελίδα"},
+                    "industry": {"type": "string", "description": "Κλάδος"},
+                    "location": {"type": "string", "description": "Τοποθεσία"},
+                    "contact": {"type": "string", "description": "Στοιχεία επικοινωνίας"},
+                    "serviceNeeded": {"type": "string", "description": "Υπηρεσία που χρειάζεται"},
+                    "onlinePresence": {"type": "string", "description": "none / basic / moderate / strong"},
+                    "source_url": {"type": "string", "description": "URL όπου βρήκες το lead"},
+                    "notes": {"type": "string", "description": "Σημειώσεις"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_time",
             "description": "Τρέχουσα ώρα και ημερομηνία.",
             "parameters": {"type": "object", "properties": {}}
@@ -264,7 +286,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent", "ceo"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent", "ceo"],
                         "description": "Ποιος agent θα λάβει το μήνυμα"
                     },
                     "message": {"type": "string", "description": "Το μήνυμα προς τον agent"},
@@ -284,7 +306,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
                         "description": "Σε ποιον agent να σταλεί το αρχείο"
                     },
                     "file_path": {"type": "string", "description": "Απόλυτο path του αρχείου προς αποστολή"},
@@ -312,7 +334,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
                         "description": "Ποιος agent θα εκτελέσει την εργασία"
                     },
                     "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
@@ -337,7 +359,7 @@ TOOL_DEFINITIONS = [
                             "properties": {
                                 "agent_id": {
                                     "type": "string",
-                                    "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                                    "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
                                     "description": "Ποιος agent θα εκτελέσει την εργασία"
                                 },
                                 "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
@@ -582,6 +604,41 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 return "\n".join(result)
             except Exception as e:
                 return f"Error reading leads: {e}"
+        elif name == "save_lead":
+            leads_dir = os.path.join(AION_DIR, "AION_CONNECT_CRM", "leads")
+            leads_file = os.path.join(leads_dir, "leads-database.json")
+            os.makedirs(leads_dir, exist_ok=True)
+            try:
+                with open(leads_file) as f:
+                    data = json.load(f)
+            except:
+                data = {"meta": {"schema": "AION CRM v1.0", "lastUpdated": "", "totalLeads": 0, "byStatus": {"incoming": 0, "qualified": 0, "contacted": 0, "converted": 0, "rejected": 0}}, "leads": []}
+            if isinstance(data, list):
+                data = {"meta": {}, "leads": data}
+            new_lead = {
+                "name": args["name"],
+                "website": args.get("website", ""),
+                "industry": args.get("industry", ""),
+                "location": args.get("location", ""),
+                "contact": args.get("contact", ""),
+                "serviceNeeded": args.get("serviceNeeded", ""),
+                "onlinePresence": args.get("onlinePresence", "unknown"),
+                "source": args.get("source_url", "leadfinder"),
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "status": "incoming"
+            }
+            if args.get("notes"):
+                new_lead["notes"] = args["notes"]
+            data.setdefault("leads", []).append(new_lead)
+            data["meta"]["lastUpdated"] = datetime.now().strftime("%Y-%m-%dT%H:%M")
+            data["meta"]["totalLeads"] = len(data["leads"])
+            existing = data["meta"].get("byStatus", {})
+            existing.setdefault("incoming", 0)
+            existing["incoming"] = sum(1 for l in data["leads"] if l.get("status") == "incoming")
+            data["meta"]["byStatus"] = existing
+            with open(leads_file, "w") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return f"✓ Lead saved: {args['name']}"
         elif name == "get_time":
             return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         elif name == "delegate_to_agent":

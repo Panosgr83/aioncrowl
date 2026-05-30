@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import SettingsPanel from './components/SettingsPanel'
+import FileBrowser from './components/FileBrowser'
+import LeadsPanel from './components/LeadsPanel'
 
 const API = 'http://127.0.0.1:9790'
 
@@ -6,7 +9,7 @@ const CATEGORIES = {
   'Core': ['ceo'],
   'Tech': ['dev', 'analytics', 'security'],
   'Business': ['sales', 'leadfinder', 'offers', 'finance'],
-  'Marketing': ['marketing', 'seo', 'imggen'],
+  'Marketing': ['marketing', 'seo', 'content', 'imggen'],
   'Support': ['support', 'memory', 'docsagent', 'consultant'],
 }
 
@@ -92,6 +95,7 @@ function App() {
   const [schedAgentId, setSchedAgentId] = useState('analytics')
   const [schedTask, setSchedTask] = useState('')
   const [schedInterval, setSchedInterval] = useState(60)
+  const [copiedIndex, setCopiedIndex] = useState(null)
 
   const [collapsedCategories, setCollapsedCategories] = useState({})
   const [expandedTools, setExpandedTools] = useState({})
@@ -106,6 +110,8 @@ function App() {
   const pendingRef = useRef({ agentId: null, sessionId: null })
   const activeAgentRef = useRef(activeAgent)
   useEffect(() => { activeAgentRef.current = activeAgent }, [activeAgent])
+  const messagesRef = useRef(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   const saveMessages = useCallback(async (fullKey, msgs) => {
     try {
@@ -184,7 +190,11 @@ function App() {
     if (!text.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return
     const sid = activeSession?.sessionId||'default'; const aid = activeAgent
     pendingRef.current = {agentId:aid,sessionId:sid}
-    setMessages(prev => [...prev, {role:'user',content:text,_aid:aid,_sid:sid,ts:new Date().toISOString()}])
+    setMessages(prev => {
+      const updated = [...prev, {role:'user', content:text, _aid:aid, _sid:sid, ts:new Date().toISOString()}]
+      saveMessages(`${aid}:${sid}`, updated.filter(m => m._aid===aid && m._sid===sid))
+      return updated
+    })
     setInput(''); setTyping(true); setCurrentEngine(''); setCurrentTool(null)
     wsRef.current.send(JSON.stringify({session_id:`${aid}:${sid}`,message:text,engine_id:selectedEngine,agent_id:aid,tools_enabled:true}))
   }, [activeAgent, activeSession, selectedEngine])
@@ -256,7 +266,8 @@ function App() {
           setTyping(false); setCurrentEngine(''); setCurrentTool(null)
           setAgentHighlights(prev=>({...prev,[aid]:Date.now()}))
           setMessages(prev => {
-            saveMessages(`${aid}:${sid}`, prev.filter(m => m._aid===aid && m._sid===sid))
+            const targetMsgs = prev.filter(m => m._aid===aid && m._sid===sid)
+            if (targetMsgs.length > 0) saveMessages(`${aid}:${sid}`, targetMsgs)
             return prev
           })
           break
@@ -373,14 +384,25 @@ function App() {
   const handleInfoKeyDown = (e) => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitInfo()} }
 
   const switchToSession = useCallback(async (agentId, sessionId) => {
+    // Save current session before switching
+    const curAid = activeAgent
+    const curSid = activeSession?.sessionId
+    if (curAid && curSid && (curAid !== agentId || curSid !== sessionId)) {
+      const currentMsgs = messagesRef.current.filter(m => m._aid === curAid && m._sid === curSid)
+      if (currentMsgs.length > 0) {
+        saveMessages(`${curAid}:${curSid}`, currentMsgs)
+      }
+    }
     setActiveAgent(agentId); setActiveSession({agentId,sessionId})
     setSelectedEngine(''); setCurrentEngine(''); setShowInfoInput(false)
     const msgs = (await loadMessages(`${agentId}:${sessionId}`)).map(m => ({...m, ts: m.ts || new Date().toISOString()}))
     setMessages(prev => {
-      const others = prev.filter(m => !(m._aid===agentId && m._sid===sessionId))
-      return [...others, ...msgs]
+      // Merge: keep existing in-memory messages, only add server messages not already present
+      const existingKeys = new Set(prev.map(m => `${m.role}|${(m.content||'').slice(0,50)}`))
+      const toAdd = msgs.filter(m => !existingKeys.has(`${m.role}|${(m.content||'').slice(0,50)}`))
+      return [...prev, ...toAdd]
     })
-  }, [])
+  }, [activeAgent, activeSession])
 
   const switchAgent = (agentId) => {
     if (!sessions[agentId]?.length) setSessions(prev => ({...prev,[agentId]:[{id:'default',label:'Chat 1',agentId}]}))
@@ -403,35 +425,114 @@ function App() {
     sidebarPanel==='files' ? <FileBrowser onClose={()=>setSidebarPanel(null)}/> :
     sidebarPanel==='leads' ? <LeadsPanel onClose={()=>setSidebarPanel(null)}/> : null
 
+  const toWordHtml = useCallback((content, isFull = false) => {
+    const css = `body{font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1a1a2e;max-width:210mm;margin:20mm auto;padding:0 15mm}
+h1,h2,h3,h4{font-weight:600;color:#1a1a2e;margin:0.6em 0 0.3em}
+h1{font-size:18pt;border-bottom:2px solid #6366f1;padding-bottom:6pt}
+h2{font-size:14pt} h3{font-size:12pt} h4{font-size:11pt}
+p{margin:0.3em 0}
+code{background:#f0f0f6;padding:1px 5px;border-radius:3px;font-family:'Cascadia Code','Fira Code',Consolas,'Courier New',monospace;font-size:9pt}
+pre{background:#f7f7fc;border:1px solid #e0e0f0;border-radius:4px;padding:8pt 12pt;font-family:'Cascadia Code','Fira Code',Consolas,'Courier New',monospace;font-size:9pt;line-height:1.4;margin:6pt 0}
+pre code{background:none;padding:0}
+ul,ol{margin:0.3em 0;padding-left:1.5em}
+li{margin:0.15em 0}
+blockquote{border-left:3px solid #6366f1;padding-left:12pt;margin:0.5em 0;color:#555;font-style:italic}
+strong{font-weight:600} em{font-style:italic}
+a{color:#6366f1;text-decoration:underline}
+hr{border:none;border-top:1px solid #e0e0e0;margin:0.8em 0}
+table{border-collapse:collapse;width:100%;margin:0.5em 0;font-size:10pt}
+th,td{border:1px solid #ddd;padding:4pt 8pt;text-align:left}
+th{background:#f0f0f6;font-weight:600}
+img{max-width:100%;height:auto}`
+    const shell = `<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+<style>${css}</style></head><body>${content}</body></html>`
+    return isFull ? shell : content
+  }, [])
+
   const exportWord = useCallback(() => {
     const agent = currentAgent?.name||'Agent'
+    const icon = currentAgent?.icon||''
     const project = currentProject === 'default' ? '' : currentProject.replace(/_/g, ' ')
-    const date = new Date().toLocaleDateString('el-GR')
-    const rows = displayMessages.map((m, i) => {
-      const roleLabel = m.role==='user'?'Χρήστης':m.role==='assistant'?'Απάντηση':m.role==='error'?'Σφάλμα':m.role==='tool_use'?'Εργαλείο: '+m.name:m.role==='tool_result'?'Αποτέλεσμα: '+m.name:m.role
+    const date = new Date().toLocaleDateString('el-GR', {weekday:'long',year:'numeric',month:'long',day:'numeric'})
+    const time = new Date().toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})
+
+    const rows = displayMessages.map((m) => {
+      const cfg = m.role==='user'?{label:'Χρήστης',icon:'👤',bg:'#f0f4ff',color:'#1a1a2e'}:
+        m.role==='assistant'?{label:'Απάντηση',icon:'🤖',bg:'#ffffff',color:'#1a1a2e'}:
+        m.role==='error'?{label:'Σφάλμα',icon:'⚠️',bg:'#fef2f2',color:'#991b1b'}:
+        m.role==='tool_use'?{label:'Εργαλείο: '+(m.name||''),icon:'🔧',bg:'#fffbeb',color:'#92400e'}:
+        m.role==='tool_result'?{label:'Αποτέλεσμα: '+(m.name||''),icon:'📎',bg:'#fafafa',color:'#444'}:null
+      if (!cfg) return ''
       const content = (m.content||JSON.stringify(m.args||'')||m.result||'').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')
-      const bg = m.role==='user'?'#f0f0ff':m.role==='assistant'?'#fafafa':m.role==='error'?'#fff0f0':'#fffbe6'
-      return `<tr${m.role==='assistant'?' style="border-top:2px solid #7c3aed"':''}><td style="padding:10px 16px;background:${bg};text-align:${m.role==='user'?'right':'left'}"><div style="font-weight:600;font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px">${roleLabel}${m.ts?' · '+new Date(m.ts).toLocaleTimeString('el-GR',{hour:'2-digit',minute:'2-digit'}):''}</div><div style="font-size:12px;line-height:1.6;color:#222">${content}</div></td></tr>`
-    }).join('\n')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${agent} - ${date}</title><style>body{font-family:Calibri,'Segoe UI',Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 20px}h1{color:#7c3aed;font-size:24px;border-bottom:3px solid #7c3aed;padding-bottom:8px}.meta{color:#888;font-size:12px;margin:8px 0 24px 0}table{width:100%;border-collapse:collapse}</style></head><body><h1>${agent}</h1>${project?`<p style="color:#7c3aed;font-size:14px"><strong>Project:</strong> ${project}</p>`:''}<div class="meta">📅 ${date} · AIONCLAW</div><table>${rows}</table></body></html>`
+      const ts = m.ts ? new Date(m.ts).toLocaleTimeString('el-GR',{hour:'2-digit',minute:'2-digit'}) : ''
+      return `<tr${m.role==='assistant'?' style="background:#fafbff"':''}>
+        <td style="padding:10pt 16pt;background:${cfg.bg};border-bottom:1px solid #e5e7eb">
+          <table style="width:100%;border-collapse:collapse"><tr>
+            <td style="width:24pt;vertical-align:top;font-size:14pt;padding-top:1pt">${cfg.icon}</td>
+            <td style="vertical-align:top">
+              <div style="font-weight:600;font-size:9pt;color:#6366f1;margin-bottom:2pt;text-transform:uppercase;letter-spacing:0.5pt">${cfg.label}</div>
+              <div style="font-size:10.5pt;line-height:1.55;color:${cfg.color}">${content}</div>
+            </td>
+            ${ts?`<td style="width:48pt;vertical-align:top;text-align:right;font-size:7.5pt;color:#999;white-space:nowrap;padding-top:2pt">${ts}</td>`:''}
+          </tr></table>
+        </td>
+      </tr>`
+    }).filter(Boolean).join('\n')
+
+    const body = `
+<div style="border-bottom:2px solid #6366f1;padding-bottom:10pt;margin-bottom:16pt">
+  <h1 style="margin:0;font-size:20pt;font-weight:700">${icon} ${agent}</h1>
+  ${project?`<div style="font-size:10pt;color:#6366f1;margin-top:4pt"><strong>Project:</strong> ${project}</div>`:''}
+  <div style="font-size:8pt;color:#888;margin-top:2pt">${date} · ${time} · AIONCLAW</div>
+</div>
+<table style="width:100%;border-collapse:collapse">${rows}</table>
+<div style="margin-top:24pt;padding-top:8pt;border-top:1px solid #e0e0e0;font-size:7.5pt;color:#aaa;text-align:center">
+  AIONCLAW — Εξαγωγή: ${date} ${time}
+</div>`
+    const html = toWordHtml(body, true)
     const blob = new Blob([html], {type:'application/msword'})
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${agent}_${date.replace(/\//g,'-')}.doc`; a.click()
-    URL.revokeObjectURL(URL)
-  }, [displayMessages, currentAgent, currentProject])
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob)
+    a.download=`${agent}_${date.replace(/\s/g,'_').replace(/\./g,'_')}.doc`; a.click()
+    URL.revokeObjectURL(a.href)
+  }, [displayMessages, currentAgent, currentProject, toWordHtml])
 
   const exportExcel = useCallback(() => {
     const agent = currentAgent?.name||'Agent'
     const date = new Date().toLocaleDateString('el-GR')
-    const rows = displayMessages.map((m, i) => {
+    const rows = displayMessages.map((m) => {
       const roleLabel = m.role==='user'?'User':m.role==='assistant'?'Assistant':m.role==='error'?'Error':m.role==='tool_use'?`Tool: ${m.name}`:m.role==='tool_result'?`Result: ${m.name}`:m.role
       const content = (m.content||JSON.stringify(m.args||'')||m.result||'').replace(/"/g,'""')
       return `"${roleLabel}","${(m.ts||'').replace(/"/g,'""')}","${content.replace(/\n/g,'↵ ')}"`
     }).join('\n')
     const csv = `Agent,Date,Role,Timestamp,Message\n"${agent}","${date}",,,,,,,,\n${rows}`
     const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8'})
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${agent}_${date.replace(/\//g,'-')}.csv`; a.click()
-    URL.revokeObjectURL(URL)
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob)
+    a.download=`${agent}_${date.replace(/\//g,'-')}.csv`; a.click()
+    URL.revokeObjectURL(a.href)
   }, [displayMessages, currentAgent])
+
+  const copyMessage = useCallback(async (msg, idx) => {
+    const isHtml = msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
+    const plain = isHtml ? msg.content.replace(/<[^>]*>/g,'') : msg.content
+    const fullHtml = isHtml
+      ? toWordHtml(msg.content, true)
+      : toWordHtml(`<p>${msg.content.replace(/\n/g,'<br>')}</p>`, true)
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([fullHtml], {type:'text/html'}),
+          'text/plain': new Blob([plain], {type:'text/plain'})
+        })
+      ])
+    } catch {
+      await navigator.clipboard.writeText(plain)
+    }
+    setCopiedIndex(idx)
+    setTimeout(() => setCopiedIndex(null), 1500)
+  }, [toWordHtml])
 
   const activityPanel = showActivity ? (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowActivity(false)}>
@@ -879,9 +980,11 @@ function App() {
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
                     <div className={`text-[10px] mt-1 ${msg.role==='user'?'text-indigo-300/60':'text-text-dim'}`}>{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
                   )}
-                  {(msg.role==='assistant'||msg.role==='user')&&(
-                    <button onClick={()=>navigator.clipboard.writeText(msg.content)}
-                      className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-app-elevated hover:bg-accent/20 rounded-full w-6 h-6 flex items-center justify-center text-xs text-text-secondary" title="Copy">📋</button>
+                  {msg.role==='assistant'&&(
+                    <div className="flex justify-end mt-1.5">
+                      <button onClick={()=>copyMessage(msg, i)}
+                        className="text-[10px] text-text-dim hover:text-accent transition-colors flex items-center gap-0.5 bg-app-elevated/50 hover:bg-app-elevated rounded-md px-1.5 py-0.5" title="Copy">{copiedIndex===i?'✓':'📋'}</button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -966,11 +1069,11 @@ function App() {
               <div className="flex-1 flex gap-2 items-center bg-app-elevated border border-app-elevated rounded-full px-5 focus-within:border-accent focus-within:shadow-[0_0_0_2px_var(--accent-glow)] transition-all">
                 <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown}
                   placeholder={connected?`Μήνυμα στον ${currentAgent?.name}...`:'Connecting...'}
-                  disabled={!connected||typing}
+                  disabled={!connected}
                   className="flex-1 py-3 bg-transparent text-text-primary placeholder-text-dim focus:outline-none disabled:opacity-40"
                 />
-                <button onClick={() => fileInputRef.current?.click()} disabled={typing}
-                  className="text-text-dim hover:text-accent transition-colors disabled:opacity-40" title="Upload file">📎</button>
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="text-text-dim hover:text-accent transition-colors" title="Upload file">📎</button>
                 <input ref={fileInputRef} type="file" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0]; if (!file) return
                   const form = new FormData(); form.append('file', file)
@@ -987,15 +1090,11 @@ function App() {
                   e.target.value = ''
                 }} />
               </div>
-              {typing ? (
-                <>
-                  <button onClick={addInfo} className="bg-accent/10 hover:bg-accent/20 text-accent rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm"><span>✏️</span> Info</button>
-                  <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm"><span>■</span> Stop</button>
-                </>
-              ) : (
-                <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
-                  className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-6 font-medium transition-all disabled:text-text-dim">Send</button>
+              {typing && (
+                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm self-center" title="Δεν σταματάει agents που δουλεύουν στο background"><span>■</span> Stop</button>
               )}
+              <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
+                className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-6 font-medium transition-all disabled:text-text-dim shrink-0">Send</button>
             </div>
           </div>
         </div>

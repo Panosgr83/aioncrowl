@@ -166,8 +166,8 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
     total_steps = 0
 
     step_estimates = {"dev": 4, "leadfinder": 3, "sales": 3, "marketing": 3, "support": 3,
-                      "analytics": 4, "security": 3, "finance": 3, "memory": 2, "ceo": 3,
-                      "imggen": 4, "seo": 3, "offers": 3, "consultant": 3, "docsagent": 3}
+"analytics": 4, "security": 3, "finance": 3, "memory": 2, "ceo": 3,
+                       "imggen": 4, "seo": 3, "offers": 3, "consultant": 3, "content": 3, "docsagent": 3}
     total_steps = step_estimates.get(agent_id, 3)
 
     for engine in engines_to_try:
