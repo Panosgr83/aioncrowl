@@ -182,6 +182,12 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
             choice = data["choices"][0]
             msg = choice["message"]
             text = msg.get("content", "")
+            if not msg.get("tool_calls"):
+                from tools import parse_xml_tool_calls
+                xml_tools, cleaned = parse_xml_tool_calls(text)
+                if xml_tools:
+                    msg["tool_calls"] = xml_tools
+                    text = cleaned
 
             if msg.get("tool_calls"):
                 num_tools = len(msg["tool_calls"])

@@ -445,6 +445,33 @@ def resolve_path(path, agent_id=None):
         raise PermissionError(f"Access denied: {p} is outside AION directory")
     return p
 
+import re as _re
+
+def parse_xml_tool_calls(text):
+    """Parse <invoke name='tool'>...</invoke> XML tool calls from engine responses.
+    Returns (tool_calls_list, cleaned_text) or (None, text) if no XML found."""
+    pattern = _re.compile(r'<invoke\s+name=["\']([^"\']+)["\']>(.*?)</invoke>', _re.DOTALL)
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None, text
+    tool_calls = []
+    for i, m in enumerate(matches):
+        name = m.group(1).strip()
+        args_text = m.group(2).strip()
+        args = {}
+        for line in args_text.split('\n'):
+            line = line.strip()
+            if ':' in line:
+                k, v = line.split(':', 1)
+                args[k.strip()] = v.strip()
+        tool_calls.append({
+            "id": f"call_{name}_{i}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}
+        })
+    cleaned = pattern.sub('', text).strip()
+    return tool_calls, cleaned
+
 def find_uploaded_file(fname):
     """Search for a file across all agent upload directories."""
     from agents import AGENTS

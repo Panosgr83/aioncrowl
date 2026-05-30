@@ -129,10 +129,10 @@ def get_engine_score(engine, task_type="general"):
     if task_type in ("coding", "reasoning", "tools") and engine["capability"] == "high":
         score += 200
     score += (10 - engine["priority"]) * 10
-    # P2: sambanova boost — fastest available engine
-    if eid == "sambanova":
-        score += 400
-    # P2: groq_8b for simple tasks — very fast capability-medium
+    # P2: prefer engines that actually work with OpenAI tool format
+    if eid in ("openrouter", "openrouter_deepseek", "openrouter_llama", "groq", "groq_8b"):
+        score += 600
+    # P2: groq_8b for simple tasks — very fast
     if task_type == "simple" and eid == "groq_8b":
         score += 600
     return score
