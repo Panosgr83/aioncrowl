@@ -460,10 +460,10 @@ function App() {
                   <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                     <td className="py-1.5 px-2 text-[9px] text-gray-500 whitespace-nowrap font-mono">{e.ts?.slice(11,19)}</td>
                     <td className="py-1.5 px-2 text-[10px] text-gray-300">{e.agent}</td>
-                    <td className="py-1.5 px-2 text-[10px] text-violet-400">{e.tool}</td>
+                    <td className="py-1.5 px-2 text-[10px] text-accent">{e.tool}</td>
                     <td className="py-1.5 px-2 text-[9px] text-gray-500 max-w-[160px] truncate">{e.args}</td>
                     <td className="py-1.5 px-2 text-[9px] text-gray-500 max-w-[200px] truncate">{e.result}</td>
-                    <td className="py-1.5 px-2 text-center">{e.success ? <span className="text-green-500 text-[10px]">✓</span> : <span className="text-red-500 text-[10px]">✗</span>}</td>
+                    <td className="py-1.5 px-2 text-center">{e.success ? <span className="text-success text-[10px]">✓</span> : <span className="text-red-500 text-[10px]">✗</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -484,7 +484,7 @@ function App() {
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowPerformance(false)}>
       <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-lg w-full mx-4 max-h-[70vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900">
-          <span className="text-xs font-medium text-violet-400">⚡ Performance Report</span>
+          <span className="text-xs font-medium text-accent">⚡ Performance Report</span>
           <button onClick={()=>setShowPerformance(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
         </div>
         <div className="p-4 text-xs text-gray-300 font-mono whitespace-pre-wrap leading-relaxed">{performanceData.report}</div>
@@ -492,7 +492,7 @@ function App() {
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/performance`);setPerformanceData(await r.json())}catch(_){}}}
             className="text-[10px] text-gray-500 hover:text-gray-300">Refresh</button>
           <button onClick={()=>{setShowPerformance(false)}}
-            className="text-[10px] text-violet-400 hover:text-violet-300 ml-auto">Close</button>
+            className="text-[10px] text-accent hover:text-accent/80 ml-auto">Close</button>
         </div>
       </div>
     </div>
@@ -644,10 +644,10 @@ function App() {
     const icon = agents.find(a=>a.id===ev.agent_id)?.icon||'🤖'
     const colors = {started:'border-blue-800/30 bg-blue-900/10',
       thinking:'border-indigo-800/30 bg-indigo-900/10',
-      synthesizing:'border-violet-800/30 bg-violet-900/10',
-      complete:'border-green-800/30 bg-green-900/10',
+      synthesizing:'border-accent/30 bg-accent/10',
+      complete:'border-success/30 bg-success/10',
       error:'border-red-800/30 bg-red-900/10'}
-    const pulses = {started:'bg-blue-400',thinking:'bg-indigo-400',synthesizing:'bg-violet-400'}
+    const pulses = {started:'bg-blue-400',thinking:'bg-indigo-400',synthesizing:'bg-accent'}
     const c = colors[ev.status]||'border-gray-800/30 bg-gray-900/10'
     const p = pulses[ev.status]
     return (
@@ -656,19 +656,19 @@ function App() {
           <span className="text-xs">{icon}</span>
           <span className="text-[10px] font-medium text-gray-400">{ev.agent_id}</span>
           {p&&<span className={`w-1.5 h-1.5 rounded-full ${p} animate-pulse ml-auto`}/>}
-          {ev.status==='complete'&&<span className="text-[9px] text-green-500 ml-auto">✓</span>}
+          {ev.status==='complete'&&<span className="text-[9px] text-success ml-auto">✓</span>}
           {ev.status==='error'&&<span className="text-[9px] text-red-500 ml-auto">✕</span>}
         </div>
         <div className="text-[10px] text-gray-400 leading-relaxed">{ev.thought}</div>
         {ev.remaining_seconds>0&&ev.status!=='complete'&&ev.status!=='error'&&(
           <div className="mt-1 flex items-center gap-2">
             <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
-              <div className="h-full bg-violet-500 rounded-full animate-pulse" style={{width:`${Math.min(100,ev.progress||50)}%`}}/>
+              <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,ev.progress||50)}%`}}/>
             </div>
-            <span className="text-[9px] text-violet-400 shrink-0">~{ev.remaining_seconds}s</span>
+            <span className="text-[9px] text-accent shrink-0">~{ev.remaining_seconds}s</span>
           </div>
         )}
-        {ev.duration_s&&<div className="text-[9px] text-green-600 mt-0.5">{ev.duration_s}s</div>}
+        {ev.duration_s&&<div className="text-[9px] text-success mt-0.5">{ev.duration_s}s</div>}
         <div className="text-[8px] text-gray-700 mt-0.5">{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
       </div>
     )
@@ -678,8 +678,8 @@ function App() {
     <div className="h-screen flex flex-col bg-app-base text-text-primary font-sans overflow-hidden">
       {/* TOP PROJECT BAR */}
       <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
-        <span className="text-violet-400 font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-green-500 animate-pulse':'bg-red-500'}`} />
+        <span className="text-accent font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success animate-pulse':'bg-red-500'}`} />
         <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
         {allProjects.filter(p => p !== 'default').map(p => (
           <button key={p} onClick={async () => {
@@ -690,17 +690,17 @@ function App() {
               setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
             } catch(_) {}
           }}
-            className={`text-xs px-3 py-1 rounded-full transition-colors shrink-0 ${p === currentProject ? 'bg-violet-600/30 text-violet-300 border border-violet-500/40' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
+            className={`text-xs px-3 py-1 rounded-full transition-colors shrink-0 ${p === currentProject ? 'bg-accent/30 text-accent/80 border border-accent/40' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
             {p.replace(/_/g, ' ')}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-1 shrink-0">
-          <button onClick={()=>setShowCollab(!showCollab)} className={`text-[10px] px-2 py-1 rounded transition-colors ${showCollab ? 'bg-violet-600/20 text-violet-400' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📋 Team</button>
+          <button onClick={()=>setShowCollab(!showCollab)} className={`text-[10px] px-2 py-1 rounded transition-colors ${showCollab ? 'bg-accent/20 text-accent' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📋 Team</button>
           <button onClick={()=>setSidebarPanel('leads')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📊 CRM</button>
           <button onClick={()=>setSidebarPanel('files')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📁 Files</button>
           <button onClick={()=>setSidebarPanel('settings')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">⚙ Settings</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/performance`);setPerformanceData(await r.json());setShowPerformance(true)}catch(_){}}}
-            className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-violet-300 hover:bg-gray-800">⚡ Perf</button>
+            className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-accent/80 hover:bg-gray-800">⚡ Perf</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/activity`);const d=await r.json();setActivityLog(d.entries||[]);setShowActivity(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-emerald-300 hover:bg-gray-800">📋 Activity</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
@@ -808,20 +808,20 @@ function App() {
           <div className="flex items-center gap-3 px-6 py-2 border-b border-gray-800 bg-gray-900/50 text-xs shrink-0">
             <span className="text-lg">{currentAgent?.icon}</span>
             <div>
-              <span className="text-violet-400 font-medium">{currentAgent?.name}</span>
+              <span className="text-accent font-medium">{currentAgent?.name}</span>
               <span className="text-gray-600 ml-2">{agentSessions.find(s=>s.id===activeSession?.sessionId)?.label||'Chat'}</span>
             </div>
             <div className="flex items-center gap-2 ml-4">
-              {currentEngine&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"/>{engines.find(e=>e.id===currentEngine)?.name||currentEngine}</span>}
+              {currentEngine&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-success rounded-full animate-pulse"/>{engines.find(e=>e.id===currentEngine)?.name||currentEngine}</span>}
               {currentTool&&<span className="text-amber-400 text-[10px] flex items-center gap-1"><span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/>⚡ {currentTool}...</span>}
-              {typing&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-pulse"/>Generating...</span>}
+              {typing&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"/>Generating...</span>}
               {loadingHistory&&<span className="text-gray-500">Loading...</span>}
             </div>
             <div className="ml-auto flex items-center gap-1">
               {displayMessages.length>0&&(
                 <>
-                  <button onClick={exportWord} className="text-gray-500 hover:text-violet-400 transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Word">📄 Word</button>
-                  <button onClick={exportExcel} className="text-gray-500 hover:text-violet-400 transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Excel">📊 Excel</button>
+                  <button onClick={exportWord} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Word">📄 Word</button>
+                  <button onClick={exportExcel} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Excel">📊 Excel</button>
                 </>
               )}
             </div>
@@ -902,28 +902,28 @@ function App() {
             {typing&&(
               <div className="flex justify-start">
                 <div className="bg-gray-800 rounded-2xl px-4 py-3 flex gap-1.5">
-                  {[0,150,300].map(d=><span key={d} className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:`${d}ms`}}/>)}
+                  {[0,150,300].map(d=><span key={d} className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{animationDelay:`${d}ms`}}/>)}
                 </div>
               </div>
             )}
 
             {taskProgress && taskProgress.status !== 'complete' && (
               <div className="flex justify-start">
-                <div className="w-full max-w-md bg-gray-800/60 rounded-xl p-3 border border-violet-800/50">
+                <div className="w-full max-w-md bg-gray-800/60 rounded-xl p-3 border border-accent/50">
                   <div className="flex items-center gap-2 text-xs text-gray-400 mb-1.5">
                     <span className="text-sm">{agents.find(a=>a.id===taskProgress.agent_id)?.icon||'🤖'}</span>
                     <span>{taskProgress.message}</span>
-                    <span className="ml-auto text-violet-400">{taskProgress.progress}%</span>
+                    <span className="ml-auto text-accent">{taskProgress.progress}%</span>
                   </div>
                   <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-violet-500 to-violet-400 rounded-full transition-all duration-500" style={{width:`${taskProgress.progress}%`}} />
+                    <div className="h-full bg-gradient-to-r from-accent to-accent-dim rounded-full transition-all duration-500" style={{width:`${taskProgress.progress}%`}} />
                   </div>
                   {taskProgress.remaining_seconds > 0 && (
                     <div className="flex items-center gap-2 mt-1">
                       <div className="flex-1 h-0.5 bg-gray-700 rounded-full overflow-hidden">
-                        <div className="h-full bg-violet-600 rounded-full animate-pulse" style={{width:`${Math.min(100,taskProgress.progress)}%`}}/>
+                        <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,taskProgress.progress)}%`}}/>
                       </div>
-                      <span className="text-[10px] text-violet-400 shrink-0">~{taskProgress.remaining_seconds}s remaining</span>
+                      <span className="text-[10px] text-accent shrink-0">~{taskProgress.remaining_seconds}s remaining</span>
                     </div>
                   )}
                 </div>
@@ -932,9 +932,9 @@ function App() {
 
             {taskProgress && taskProgress.status === 'complete' && taskProgress.duration_s && (
               <div className="flex justify-start">
-                <div className="bg-gray-800/40 rounded-xl px-3 py-2 border border-green-800/30 text-xs text-gray-400 flex items-center gap-2">
+                <div className="bg-gray-800/40 rounded-xl px-3 py-2 border border-success/30 text-xs text-gray-400 flex items-center gap-2">
                   <span>✅ {agents.find(a=>a.id===taskProgress.agent_id)?.icon} {taskProgress.agent_id}</span>
-                  <span className="text-green-500">{taskProgress.duration_s}s</span>
+                  <span className="text-success">{taskProgress.duration_s}s</span>
                 </div>
               </div>
             )}
@@ -1000,7 +1000,7 @@ function App() {
             <div className="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 uppercase font-medium flex items-center justify-between gap-2">
               <span>Team Activity</span>
               <div className="flex items-center gap-1">
-                <button onClick={()=>{setShowProjectInput(!showProjectInput)}} className="text-gray-600 hover:text-violet-400 transition-colors text-[10px]" title="New project">✏️</button>
+                <button onClick={()=>{setShowProjectInput(!showProjectInput)}} className="text-gray-600 hover:text-accent transition-colors text-[10px]" title="New project">✏️</button>
                 <button onClick={clearCollab} className="text-gray-600 hover:text-red-400 transition-colors text-[10px]" title="Clear activity">✕</button>
               </div>
             </div>
@@ -1014,7 +1014,7 @@ function App() {
                 } catch(_) {}
                 setShowProjectInput(false); setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
               }} className="flex gap-1 p-2 border-b border-gray-800">
-                <input name="project" placeholder="project name..." className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-violet-500"/>
+                <input name="project" placeholder="project name..." className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-accent"/>
               </form>
             )}
 
@@ -1057,9 +1057,9 @@ function App() {
                     <div className={`flex items-center gap-1.5 mb-0.5 ${isRead ? 'opacity-40' : ''}`}>
                       <span className="text-sm">{fromAgent?.icon||'🤖'}</span>
                       <span className={`text-[10px] font-medium ${isRead ? 'text-gray-600 line-through' : 'text-gray-400'}`}>{fromAgent?.name||ev.from}{ev.to?` → ${toAgent?.name||ev.to}`:''}</span>
-                      <span className={`ml-auto w-2 h-2 rounded-full ${activeAgents[ev.from]==='writing'||activeAgents[ev.to]==='writing'?'bg-green-400 animate-pulse':activeAgents[ev.from]==='has_response'?'bg-green-500':'bg-gray-600'}`} />
+                      <span className={`ml-auto w-2 h-2 rounded-full ${activeAgents[ev.from]==='writing'||activeAgents[ev.to]==='writing'?'bg-success/60 animate-pulse':activeAgents[ev.from]==='has_response'?'bg-success':'bg-gray-600'}`} />
                     </div>
-                    <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-gray-600' : ev.action === 'delegate' ? 'text-amber-300' : ev.action === 'result' ? 'text-green-300' : ev.type === 'task_progress' ? 'text-violet-300' : 'text-gray-300'}`}>
+                    <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-gray-600' : ev.action === 'delegate' ? 'text-amber-300' : ev.action === 'result' ? 'text-success/70' : ev.type === 'task_progress' ? 'text-accent/80' : 'text-gray-300'}`}>
                       {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
                     </div>
                     <div className={`text-[11px] mt-0.5 line-clamp-2 ${isRead ? 'text-gray-600 line-through opacity-40' : 'text-gray-400'}`}>{ev.content||ev.thought||ev.message||''}</div>
@@ -1073,7 +1073,7 @@ function App() {
       </div>
       {/* BOTTOM STATUS BAR */}
       <div className="h-6 bg-gray-900 border-t border-gray-800 flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-green-500':'bg-red-500'}`} />
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-red-500'}`} />
         <span className="text-gray-600 shrink-0">{wsStatus}</span>
         <div className="h-3 w-px bg-gray-800 shrink-0" />
         {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
@@ -1093,7 +1093,7 @@ function App() {
                 <span className="w-1 h-1 bg-amber-400 rounded-full animate-pulse"/>
                 {a.icon}
                 <span className="text-gray-500">{a.name.split(' ')[0]}</span>
-                {last?.remaining_seconds > 0 && <span className="text-violet-500">~{last.remaining_seconds}s</span>}
+                {last?.remaining_seconds > 0 && <span className="text-accent">~{last.remaining_seconds}s</span>}
               </span>
             )
           })}
