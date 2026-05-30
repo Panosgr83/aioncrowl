@@ -718,6 +718,29 @@ async def get_comm_log(limit: int = Query(50)):
             entries.append(e)
     return {"entries": entries[-limit:]}
 
+@app.get("/api/agent-heartbeat")
+async def get_agent_heartbeat():
+    from collaboration import bus
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    last_seen = {}
+    for e in reversed(bus.history):
+        aid = e.get("agent_id") or e.get("from") or e.get("to")
+        if aid and aid not in last_seen:
+            try:
+                ts = e.get("ts", "")
+                if ts:
+                    et = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    last_seen[aid] = int((now - et).total_seconds())
+            except:
+                last_seen[aid] = 0
+    for e in reversed(bus.history):
+        if e.get("type") == "agent_comm":
+            for aid in (e.get("from"), e.get("to")):
+                if aid and aid not in last_seen:
+                    last_seen[aid] = 0
+    return {"last_seen": last_seen}
+
 @app.get("/api/activity")
 async def get_activity(limit: int = Query(100)):
     return {"entries": read_activity(limit)}

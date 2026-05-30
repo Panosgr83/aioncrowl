@@ -116,6 +116,10 @@ function App() {
   const [commEvents, setCommEvents] = useState([])
   const [agentPerf, setAgentPerf] = useState({})
   const [consoleTab, setConsoleTab] = useState('activity')
+  const [lastSeenPerAgent, setLastSeenPerAgent] = useState({})
+  const [liveEvents, setLiveEvents] = useState([])
+  const liveRef = useRef([])
+  useEffect(() => { liveRef.current = liveEvents }, [liveEvents])
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -347,6 +351,16 @@ function App() {
     }).catch(()=>{})
   }, [])
 
+  // Heartbeat polling — flag agents with no recent events
+  useEffect(() => {
+    const poll = setInterval(() => {
+      fetch(`${API}/api/agent-heartbeat`).then(r=>r.json()).then(d => {
+        if (d.last_seen) setLastSeenPerAgent(prev => ({...prev, ...d.last_seen}))
+      }).catch(()=>{})
+    }, 15000)
+    return () => clearInterval(poll)
+  }, [])
+
   useEffect(() => {
     let closed = false
     function connectCollab() {
@@ -360,6 +374,16 @@ function App() {
           } else if (data.type === 'agent_thinking') {
             setThinkingEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-50))
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+            setLastSeenPerAgent(prev => ({...prev, [data.agent_id]: 0}))
+            if ((data.status === 'started' || data.status === 'thinking') && (!data._sid || data._sid === pendingRef.current.sessionId)) {
+              setLiveEvents(prev => [...prev, {...data, _liveType: 'thinking'}].slice(-20))
+            }
+            if (data.status === 'complete') {
+              setLiveEvents(prev => [...prev, {...data, _liveType: 'complete'}].slice(-20))
+            }
+            if (data.status === 'error') {
+              setLiveEvents(prev => [...prev, {...data, _liveType: 'error'}].slice(-20))
+            }
             if (data.status === 'started' && data.agent_id !== activeAgentRef.current) {
               const a = agents.find(x => x.id === data.agent_id)
               setMessages(prev => {
@@ -392,9 +416,12 @@ function App() {
             setTaskProgress(data)
             if (data.status === 'complete') setTimeout(() => setTaskProgress(null), 8000)
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+            setLiveEvents(prev => [...prev, {...data, _liveType: 'progress'}].slice(-20))
           } else if (data.type === 'agent_comm') {
             setCommEvents(prev => [...prev, data].slice(-200))
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+            setLiveEvents(prev => [...prev, {...data, _liveType: 'comm'}].slice(-20))
+            setLastSeenPerAgent(prev => ({...prev, [data.from]: 0, [data.to]: 0}))
           } else if (data.type === 'agent_tool_step') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
           } else if (data.type === 'file_updated') {
@@ -1192,35 +1219,63 @@ img{max-width:100%;height:auto}`
           </>
         )}
       </div>
-      {/* BOTTOM STATUS BAR */}
-      <div className="h-7 bg-app-surface border-t border-app-elevated flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-error'}`} />
-        <span className="text-gray-600 shrink-0">{wsStatus}</span>
-        <div className="h-3 w-px bg-gray-800 shrink-0" />
-        {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
-          <span className="text-amber-400 shrink-0 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/>
-            Working...
-          </span>
-        )}
-        <div className="flex gap-2 overflow-x-auto">
-          {agents.filter(a => {
-            const t = thinkingEvents.filter(e => e.agent_id === a.id)
-            return t.length > 0 && t.some(e => e.status !== 'complete' && e.status !== 'error')
-          }).map(a => {
-            const last = thinkingEvents.filter(e => e.agent_id === a.id).pop()
-            const toolSteps = collabEvents.filter(e => e.type === 'agent_tool_step' && e.agent_id === a.id && e.status === 'started')
-            const currentTool = toolSteps.length > 0 ? toolSteps[toolSteps.length - 1]?.tool : null
+      {/* BOTTOM LIVE CONSOLE */}
+      <div className="bg-app-surface border-t border-app-elevated shrink-0 overflow-hidden" onClick={()=>{setShowConsole(true)}}>
+        {/* Status row */}
+        <div className="flex items-center gap-2 px-3 py-1 text-[10px] overflow-x-auto border-b border-app-elevated/40">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-error'}`} />
+          <span className="text-gray-600 shrink-0">{wsStatus}</span>
+          <div className="h-3 w-px bg-gray-800 shrink-0" />
+          {agents.slice(0, 8).map(a => {
+            const isWorking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
+            const secsSinceEvent = lastSeenPerAgent[a.id]
+            const isUnresponsive = typeof secsSinceEvent === 'number' && secsSinceEvent > 60
+            const isWaiting = typeof secsSinceEvent === 'number' && secsSinceEvent > 30
+            let dotColor = 'bg-text-dim/30'
+            if (isWorking || isWaiting) dotColor = 'bg-amber-400' + (isWorking ? ' animate-pulse' : '')
+            if (isUnresponsive) dotColor = 'bg-red-500 animate-pulse'
+            if (isWorking) dotColor = 'bg-amber-400 animate-pulse'
             return (
-              <span key={a.id} className="flex items-center gap-1 text-gray-400 shrink-0">
-                <span className="w-1 h-1 bg-amber-400 rounded-full animate-pulse"/>
-                {a.icon}
-                <span className="text-gray-500">{a.name.split(' ')[0]}</span>
-                {currentTool && <span className="text-amber-500/70 font-mono">:{currentTool}</span>}
-                {last?.remaining_seconds > 0 && <span className="text-accent">~{last.remaining_seconds}s</span>}
+              <span key={a.id} className="flex items-center gap-1 shrink-0" title={`${a.name}: ${isWorking?'working':isUnresponsive?'unresponsive ('+secsSinceEvent+'s)':isWaiting?'waiting ('+secsSinceEvent+'s)':'idle'}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                <span className="text-gray-500">{a.icon}</span>
               </span>
             )
           })}
+          <span className="text-gray-600 shrink-0">+{Math.max(0, agents.length - 8)}</span>
+          <div className="ml-auto flex items-center gap-1 shrink-0">
+            <span className="text-gray-600 cursor-pointer hover:text-gray-300 text-[9px]">▴ expand</span>
+          </div>
+        </div>
+        {/* Live feed */}
+        <div className="h-20 overflow-y-auto px-3 py-1 space-y-0.5 font-mono text-[9px]">
+          {liveEvents.length === 0 ? (
+            <div className="text-gray-700 italic py-2">Waiting for agent activity...</div>
+          ) : (
+            [...liveEvents].reverse().slice(0, 6).map((ev, i) => {
+              const ts = ev.ts ? fmtTime(ev.ts) : ''
+              let prefix = '', color = 'text-gray-500'
+              if (ev._liveType === 'thinking') { prefix = '⏳'; color = 'text-amber-400' }
+              else if (ev._liveType === 'complete') { prefix = '✅'; color = 'text-green-400' }
+              else if (ev._liveType === 'error') { prefix = '❌'; color = 'text-red-400' }
+              else if (ev._liveType === 'comm') {
+                const fromAg = agents.find(x => x.id === ev.from)
+                const toAg = agents.find(x => x.id === ev.to)
+                prefix = `${fromAg?.icon||'🤖'} ${ev.from} → ${toAg?.icon||'🤖'} ${ev.to}`
+                color = ev.action === 'delegate' ? 'text-amber-400' : ev.action === 'result' || ev.action === 'reply' ? 'text-green-400' : 'text-gray-400'
+              }
+              else if (ev._liveType === 'progress') { prefix = '🔧'; color = 'text-accent' }
+              const content = ev.content || ev.thought || ev.message || ev.tool || ''
+              const maxLen = content.length > 80 ? content.slice(0,80)+'…' : content
+              return (
+                <div key={i} className={`flex gap-2 ${color}`}>
+                  <span className="text-gray-600 shrink-0 w-14">{ts}</span>
+                  <span className="shrink-0">{prefix}</span>
+                  <span className="truncate">{maxLen}</span>
+                </div>
+              )
+            })
+          )}
         </div>
       </div>
       {knowledgePanel}
