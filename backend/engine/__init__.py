@@ -132,6 +132,9 @@ def get_engine_score(engine, task_type="general"):
     # P2: prefer engines that actually work with OpenAI tool format
     if eid in ("openrouter", "openrouter_deepseek", "openrouter_llama", "groq", "groq_8b"):
         score += 600
+    # openrouter_deepseek is the best overall (fast + tools + high cap + free)
+    if eid == "openrouter_deepseek":
+        score += 600
     # P2: groq_8b for simple tasks — very fast
     if task_type == "simple" and eid == "groq_8b":
         score += 600
