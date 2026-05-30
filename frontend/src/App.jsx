@@ -844,7 +844,11 @@ function App() {
                   {msg.role==='system'&&<div className={`whitespace-pre-wrap ${msg._sysType==='thinking'?'text-accent/70':msg._sysType==='warning'?'text-warning':'text-text-dim italic'}`}>{msg.content}</div>}
                   {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-warning rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-text-dim rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-warning text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
                   {msg.role==='tool_result'&&<><div className="text-text-dim mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
-                  {(msg.role==='assistant'||msg.role==='user')&&<div className="whitespace-pre-wrap">{msg.content}</div>}
+                  {(msg.role==='assistant'||msg.role==='user')&&(
+                    msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
+                      ? <div className="render-html" dangerouslySetInnerHTML={{__html: msg.content}} />
+                      : <div className="whitespace-pre-wrap">{msg.content}</div>
+                  )}
                   {msg._grouped && msg.tools?.length > 0 && (
                     <div className="mt-3 pt-2 border-t border-app-elevated">
                       <button onClick={() => setExpandedTools(prev => ({...prev, [i]: !prev[i]}))}
