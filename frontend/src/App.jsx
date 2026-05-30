@@ -10,9 +10,42 @@ const CATEGORIES = {
   'Support': ['support', 'memory', 'docsagent', 'consultant'],
 }
 
-import SettingsPanel from './components/SettingsPanel'
-import FileBrowser from './components/FileBrowser'
-import LeadsPanel from './components/LeadsPanel'
+function groupToolCalls(msgs) {
+  const result = []
+  let i = 0
+  while (i < msgs.length) {
+    const msg = msgs[i]
+    if (msg.role === 'assistant') {
+      const tools = []
+      let j = i + 1
+      while (j < msgs.length &&
+             (msgs[j].role === 'tool_use' || msgs[j].role === 'tool_result')) {
+        if (msgs[j].role === 'tool_use') {
+          const resultMsg = msgs[j+1]?.role === 'tool_result' ? msgs[j+1] : null
+          const duration = resultMsg && msgs[j].ts && resultMsg.ts
+            ? ((new Date(resultMsg.ts) - new Date(msgs[j].ts)) / 1000).toFixed(1)
+            : null
+          tools.push({
+            name: msgs[j].name,
+            args: msgs[j].args,
+            result: resultMsg?.result,
+            duration
+          })
+          if (resultMsg) j++
+        }
+        j++
+      }
+      const dvals = tools.map(t => parseFloat(t.duration)||0).filter(d => d>0)
+      const total = dvals.length > 1 ? Math.max(...dvals).toFixed(1) : (dvals[0]?.toFixed(1) || null)
+      result.push({ ...msg, tools, _grouped: true, _totalDuration: total })
+      i = j
+    } else {
+      result.push(msg)
+      i++
+    }
+  }
+  return result
+}
 
 function App() {
   const [agents, setAgents] = useState([])
@@ -61,6 +94,7 @@ function App() {
   const [schedInterval, setSchedInterval] = useState(60)
 
   const [collapsedCategories, setCollapsedCategories] = useState({})
+  const [expandedTools, setExpandedTools] = useState({})
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -114,9 +148,9 @@ function App() {
 
   const currentAgent = agents.find(a => a.id === activeAgent)
   const agentSessions = sessions[activeAgent] || []
-  const displayMessages = messages.filter(m =>
+  const displayMessages = groupToolCalls(messages.filter(m =>
     m._aid === activeAgent && m._sid === (activeSession?.sessionId || 'default')
-  )
+  ))
   const recentThinking = thinkingEvents.slice(-5).reverse()
 
   const stopGeneration = useCallback(() => {
@@ -804,13 +838,39 @@ function App() {
               </div>
             )}
 
-            {displayMessages.map((msg,i)=>(
+            {displayMessages.map((msg,i)=>msg?(
               <div key={i} className={`flex ${msg.role==='user'?'justify-end':msg.role==='system'?'justify-center':'justify-start'}`}>
                 <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/20':msg.role==='system'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-app-surface text-text-secondary text-xs font-mono border border-app-elevated':'bg-app-surface text-text-primary border-l-2 border-accent'}`}>
                   {msg.role==='system'&&<div className="whitespace-pre-wrap">{msg.content}</div>}
-                  {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-gray-600 rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-amber-400 text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
-                  {msg.role==='tool_result'&&<><div className="text-gray-500 mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
+                  {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-warning rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-text-dim rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-warning text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
+                  {msg.role==='tool_result'&&<><div className="text-text-dim mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
                   {(msg.role==='assistant'||msg.role==='user')&&<div className="whitespace-pre-wrap">{msg.content}</div>}
+                  {msg._grouped && msg.tools?.length > 0 && (
+                    <div className="mt-3 pt-2 border-t border-app-elevated">
+                      <button onClick={() => setExpandedTools(prev => ({...prev, [i]: !prev[i]}))}
+                        className="flex items-center gap-1.5 text-[10px] text-text-dim hover:text-text-secondary transition-colors w-full text-left">
+                        <span className="text-[8px]">{expandedTools[i] ? '▾' : '▸'}</span>
+                        {msg.tools.length === 1
+                          ? <><span className="text-warning">{msg.tools[0].name}</span> · <span className="font-mono text-[9px]">{msg.tools[0].duration}s</span></>
+                          : <>{msg.tools.length} tools · <span className="font-mono text-[9px]">{msg._totalDuration}s</span></>}
+                      </button>
+                      {expandedTools[i] && (
+                        <div className="mt-2 space-y-1.5">
+                          {msg.tools.map((t,j) => (
+                            <div key={j} className="bg-app-elevated rounded-lg px-3 py-2 text-xs">
+                              <div className="flex items-center gap-2 text-text-secondary mb-0.5">
+                                <span>🔧</span>
+                                <span className="text-warning font-medium">{t.name}</span>
+                                {t.duration && <span className="font-mono text-[9px] text-text-dim ml-auto">{t.duration}s</span>}
+                              </div>
+                              {t.args && <div className="text-text-dim text-[9px] font-mono truncate">{JSON.stringify(t.args).slice(0,120)}</div>}
+                              {t.result && <div className="text-text-dim text-[9px] mt-0.5 line-clamp-2 font-mono">{t.result.slice(0,200)}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {msg.role==='error'&&<div className="whitespace-pre-wrap text-sm">{msg.content}</div>}
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
                     <div className={`text-[10px] mt-1 ${msg.role==='user'?'text-indigo-300/60':'text-text-dim'}`}>{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
@@ -821,7 +881,7 @@ function App() {
                   )}
                 </div>
               </div>
-            ))}
+            ):null)}
 
             {showInfoInput&&(
               <div className="flex justify-center">
