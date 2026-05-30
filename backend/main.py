@@ -914,85 +914,39 @@ async def websocket_chat(ws: WebSocket):
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
 
                 tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
-                resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=True)
 
-                full_content = ""
-                collected_tools = []
-                finish = ""
-                response_start = datetime.now().isoformat()
+                # Step 1: Non-streaming call to get tool calls (streaming doesn't deliver tool_calls)
+                init_resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=False)
+                init_data = init_resp.json()
+                init_choice = init_data["choices"][0]
+                init_msg = init_choice["message"]
+                init_content = init_msg.get("content", "")
 
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    if line.startswith(b"data: "):
-                        chunk_str = line[6:].decode()
-                        if chunk_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(chunk_str)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            if delta.get("content"):
-                                full_content += delta["content"]
-                                await ws_send({"type": "delta", "content": delta["content"], "ts": response_start})
-                            if delta.get("tool_calls"):
-                                for tc in delta["tool_calls"]:
-                                    collected_tools.append(tc)
-                            finish = chunk.get("choices", [{}])[0].get("finish_reason", "")
-                        except:
-                            continue
-                t1 = time.time()
-                record_engine_perf(engine["id"], t1 - t0, True)
-
-                if not collected_tools:
+                # Parse XML tool calls if engine uses XML format instead of OpenAI tools
+                tool_calls = init_msg.get("tool_calls")
+                if not tool_calls:
                     from tools import parse_xml_tool_calls
-                    xml_tools, _clean = parse_xml_tool_calls(full_content)
+                    xml_tools, cleaned = parse_xml_tool_calls(init_content)
                     if xml_tools:
-                        collected_tools = []
-                        for xtc in xml_tools:
-                            collected_tools.append({
-                                "index": len(collected_tools),
-                                "id": xtc["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": xtc["function"]["name"],
-                                    "arguments": xtc["function"]["arguments"]
-                                }
-                            })
+                        tool_calls = xml_tools
+                        init_content = cleaned
 
-                if collected_tools:
-                    combined_tools = []
-                    tc_map = {}
-                    tc_order = []
-                    for tc in collected_tools:
-                        idx = tc.get("index", 0)
-                        if idx not in tc_map:
-                            tc_map[idx] = {"id": tc.get("id", ""), "function": {"name": "", "arguments": ""}}
-                            tc_order.append(idx)
-                        if tc.get("id"):
-                            tc_map[idx]["id"] = tc["id"]
-                        func = tc.get("function", {})
-                        if func.get("name"):
-                            tc_map[idx]["function"]["name"] += func["name"]
-                        if func.get("arguments"):
-                            tc_map[idx]["function"]["arguments"] += func["arguments"]
-                    combined_tools = [tc_map[i] for i in tc_order]
+                if tool_calls:
+                    # Send initial assistant message + tool_calls to frontend
+                    ctx.add_message("assistant", init_content, tool_calls=tool_calls)
+                    await ws_send({"type": "tool_calls", "tool_calls": tool_calls})
 
-                    ctx.add_message("assistant", full_content, tool_calls=combined_tools)
-                    await ws_send({"type": "tool_calls", "tool_calls": combined_tools})
-
-                    total_tools = len(combined_tools)
-                    for ti, tc in enumerate(combined_tools):
+                    total_tools = len(tool_calls)
+                    for ti, tc in enumerate(tool_calls):
                         func_name = tc.get("function", {}).get("name", "")
                         func_args = json.loads(tc.get("function", {}).get("arguments", "{}")) if tc.get("function", {}).get("arguments") else {}
                         tc_id = tc.get("id", "")
                         await ws_send({"type": "tool_start", "name": func_name, "args": func_args})
-                        # Broadcast progress + thinking via collab bus
-                        progress_pct = min(int((ti + 1) / total_tools * 95), 95)
                         bus.broadcast({
                             "type": "task_progress",
                             "agent_id": agent_id,
                             "status": "running",
-                            "progress": progress_pct,
+                            "progress": min(int((ti + 1) / total_tools * 95), 95),
                             "message": f"🔧 {func_name} ({ti+1}/{total_tools})",
                             "ts": datetime.now().isoformat(),
                         })
@@ -1008,37 +962,38 @@ async def websocket_chat(ws: WebSocket):
                         ctx.add_message("tool", result, tool_call_id=tc_id)
                         tool_calls_made.append({"name": func_name, "result": result[:200]})
 
-                    # Broadcast synthesizing
                     bus.broadcast({
                         "type": "agent_thinking",
                         "agent_id": agent_id,
                         "status": "synthesizing",
-                        "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα εργαλείων...",
+                        "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα...",
                         "ts": datetime.now().isoformat(),
                     })
+
+                    # Step 2: Stream the synthesis response
                     t2 = time.time()
-                    final_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024)
-                    final_content = ""
-                    for line in final_resp.iter_lines():
-                        if not line:
-                            continue
+                    syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024)
+                    full_content = ""
+                    for line in syn_resp.iter_lines():
+                        if not line: continue
                         if line.startswith(b"data: "):
-                            chunk_str = line[6:].decode()
-                            if chunk_str == "[DONE]":
-                                break
+                            cs = line[6:].decode()
+                            if cs == "[DONE]": break
                             try:
-                                chunk = json.loads(chunk_str)
+                                chunk = json.loads(cs)
                                 d = chunk.get("choices", [{}])[0].get("delta", {})
                                 if d.get("content"):
-                                    final_content += d["content"]
+                                    full_content += d["content"]
                                     await ws_send({"type": "delta", "content": d["content"]})
-                            except:
-                                continue
+                            except: continue
                     record_engine_perf(engine["id"], time.time() - t2, True)
-                    response_text = final_content
-                    ctx.add_message("assistant", final_content)
-                else:
                     response_text = full_content
+                    ctx.add_message("assistant", full_content)
+                else:
+                    # No tool calls — stream the initial content directly
+                    await ws_send({"type": "delta", "content": init_content, "ts": datetime.now().isoformat()})
+                    ctx.add_message("assistant", init_content)
+                    response_text = init_content
                     ctx.add_message("assistant", full_content)
 
                 if needs_summary(ctx.messages):
