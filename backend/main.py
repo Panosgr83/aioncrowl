@@ -14,6 +14,7 @@ from tools import TOOL_DEFINITIONS, execute_tool, read_activity
 from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
 from collaboration import bus
+from scheduler import start_scheduler, get_jobs, add_job, delete_job, toggle_job, run_job_now
 
 AION_DIR = os.path.expanduser("~/AION")
 MAX_TOOL_ITER = 5
@@ -32,6 +33,8 @@ async def lifespan(app):
             pdata["projects"].append(p)
     _save_project(pdata)
     print(f"Projects: {pdata['projects']}")
+    start_scheduler()
+    print("Scheduler started")
     yield
     print("AIONCLAW server stopped.")
 
@@ -736,6 +739,39 @@ async def knowledge_delete(project: str):
     from kb import delete_collection
     ok = delete_collection(project)
     return {"status": "deleted" if ok else "not_found"}
+
+@app.get("/api/scheduler/jobs")
+async def scheduler_jobs():
+    return {"jobs": get_jobs()}
+
+class SchedulerAdd(BaseModel):
+    name: str
+    agent_id: str
+    task: str
+    interval_minutes: int = 60
+    project: str = ""
+
+@app.post("/api/scheduler/add")
+async def scheduler_add(data: SchedulerAdd):
+    from kb import _get_current_project
+    project = data.project or _get_current_project()
+    job = add_job(data.name, data.agent_id, data.task, data.interval_minutes, project)
+    return {"status": "added", "job": job}
+
+@app.delete("/api/scheduler/{job_id}")
+async def scheduler_delete(job_id: str):
+    delete_job(job_id)
+    return {"status": "deleted"}
+
+@app.post("/api/scheduler/{job_id}/toggle")
+async def scheduler_toggle(job_id: str):
+    toggle_job(job_id)
+    return {"status": "toggled"}
+
+@app.post("/api/scheduler/{job_id}/run")
+async def scheduler_run(job_id: str):
+    ok = run_job_now(job_id)
+    return {"status": "executed" if ok else "not_found"}
 
 @app.get("/api/files")
 async def list_files(path: str = ""):

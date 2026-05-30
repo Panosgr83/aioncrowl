@@ -51,6 +51,12 @@ export default function SettingsPanel({ onClose }) {
                 {p.calls} calls · avg {p.avg_time}s · {p.success_rate}% success
               </div>
             )}
+            {e.rate_limit && (
+              <div className={`text-[8px] mt-0.5 ${e.rate_limit.throttled ? 'text-red-400' : 'text-gray-600'}`}>
+                {e.rate_limit.calls_in_window}/{e.rate_limit.max_calls} RPM
+                {e.rate_limit.throttled && <span> · wait {e.rate_limit.wait_seconds}s</span>}
+              </div>
+            )}
           </div>
           <div className={`flex items-center gap-1 text-[9px] ${e.status === 'active' ? 'text-green-400' : 'text-red-400'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${e.status === 'active' ? 'bg-green-400' : 'bg-red-400'}`} />

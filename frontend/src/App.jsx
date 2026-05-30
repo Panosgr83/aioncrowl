@@ -46,6 +46,11 @@ function App() {
   const [kbQuery, setKbQuery] = useState('')
   const [kbResults, setKbResults] = useState([])
   const [kbTab, setKbTab] = useState('browse')
+  const [schedulerJobs, setSchedulerJobs] = useState([])
+  const [schedName, setSchedName] = useState('')
+  const [schedAgentId, setSchedAgentId] = useState('analytics')
+  const [schedTask, setSchedTask] = useState('')
+  const [schedInterval, setSchedInterval] = useState(60)
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -457,10 +462,10 @@ function App() {
           <button onClick={()=>setShowKnowledge(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
         </div>
         <div className="flex border-b border-gray-800 text-xs">
-          {['browse','search','upload'].map(tab=>(
-            <button key={tab} onClick={()=>setKbTab(tab)}
+          {['browse','search','upload','schedule'].map(tab=>(
+            <button key={tab} onClick={()=>{setKbTab(tab);if(tab==='schedule')fetchSchedulerJobs()}}
               className={`px-4 py-2 ${kbTab===tab?'text-amber-400 border-b border-amber-400':'text-gray-500 hover:text-gray-300'}`}>
-              {tab==='browse'?'📚 Browse':tab==='search'?'🔍 Search':'📤 Upload'}
+              {tab==='browse'?'📚 Browse':tab==='search'?'🔍 Search':tab==='upload'?'📤 Upload':'⏰ Schedule'}
             </button>
           ))}
         </div>
@@ -531,9 +536,55 @@ function App() {
             <div className="mt-3 text-gray-500 text-[9px]">Uploaded text files are auto-indexed into the current project KB. Agents can then search them with query_kb.</div>
           </div>
         )}
+        {kbTab === 'schedule' && (
+          <div className="p-4 text-xs">
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              <input value={schedName} onChange={e=>setSchedName(e.target.value)} placeholder="Job name"
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300 focus:outline-none focus:border-amber-500 text-[10px]"/>
+              <select value={schedAgentId} onChange={e=>setSchedAgentId(e.target.value)}
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300 text-[10px]">
+                {agents.filter(a=>a.id!=='ceo').map(a=>(<option key={a.id} value={a.id}>{a.icon} {a.id}</option>))}
+              </select>
+              <input type="number" value={schedInterval} onChange={e=>setSchedInterval(Number(e.target.value)||60)} placeholder="Min"
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-300 w-16 text-[10px]"/>
+              <button onClick={async()=>{if(!schedName||!schedTask)return;try{const r=await fetch(`${API}/api/scheduler/add`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:schedName,agent_id:schedAgentId,task:schedTask,interval_minutes:schedInterval,project:currentProject})});await r.json();setSchedName('');setSchedTask('');fetchSchedulerJobs()}catch(_){}}}
+                className="text-[10px] px-2 py-1.5 bg-amber-600/20 text-amber-400 rounded hover:bg-amber-600/30">Add</button>
+            </div>
+            <textarea value={schedTask} onChange={e=>setSchedTask(e.target.value)} placeholder="Task description (what the agent should do)"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-300 focus:outline-none focus:border-amber-500 text-[10px] h-16 resize-none mb-3"/>
+            <div className="text-gray-500 text-[9px] mb-2">{schedulerJobs.length} jobs · Refreshes every interval</div>
+            {schedulerJobs.length===0 ? (
+              <div className="text-center py-4 text-gray-600">No scheduled jobs</div>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {schedulerJobs.map(j=>(
+                  <div key={j.id} className="bg-gray-800/50 rounded px-3 py-2 flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-gray-300 text-[10px] truncate">{j.name}</div>
+                      <div className="text-gray-500 text-[9px]">{j.agent_id} · every {j.interval_minutes}m · {j.run_count||0} runs</div>
+                      {j.last_run && <div className="text-gray-600 text-[8px]">last: {j.last_run?.slice(0,16)}</div>}
+                    </div>
+                    <div className="flex gap-1 shrink-0 ml-2">
+                      <button onClick={async()=>{await fetch(`${API}/api/scheduler/${j.id}/run`,{method:'POST'});fetchSchedulerJobs()}}
+                        className="text-[9px] text-emerald-400 hover:text-emerald-300">▶</button>
+                      <button onClick={async()=>{await fetch(`${API}/api/scheduler/${j.id}/toggle`,{method:'POST'});fetchSchedulerJobs()}}
+                        className={`text-[9px] ${j.enabled?'text-amber-400':'text-gray-600'} hover:text-amber-300`}>{j.enabled?'⏸':'▶'}</button>
+                      <button onClick={async()=>{await fetch(`${API}/api/scheduler/${j.id}`,{method:'DELETE'});fetchSchedulerJobs()}}
+                        className="text-[9px] text-red-400 hover:text-red-300">✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   ) : null
+
+  const fetchSchedulerJobs = async () => {
+    try { const r = await fetch(`${API}/api/scheduler/jobs`); const d = await r.json(); setSchedulerJobs(d.jobs||[]); } catch(_) {}
+  }
 
   const uploadKbFile = async (file) => {
     try {

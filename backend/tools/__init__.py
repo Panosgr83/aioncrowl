@@ -7,6 +7,25 @@ PERF_START = {}
 MEMORY_LOCK = threading.Lock()
 ACTIVITY_FILE = os.path.join(AION_DIR, "MEMORY", "activity.jsonl")
 
+def _get_memory_file():
+    try:
+        from kb import _get_current_project
+        project = _get_current_project()
+        if project and project != "default":
+            pfile = os.path.join(AION_DIR, "MEMORY", project, "memory.json")
+            if os.path.exists(pfile):
+                return pfile
+            legacy = os.path.join(AION_DIR, "MEMORY", "memory.json")
+            if os.path.exists(legacy):
+                os.makedirs(os.path.dirname(pfile), exist_ok=True)
+                import shutil
+                shutil.copy2(legacy, pfile)
+                return pfile
+            return pfile
+    except:
+        pass
+    return MEMORY_FILE
+
 def log_activity(agent_id, tool, args, result, success=True):
     try:
         os.makedirs(os.path.dirname(ACTIVITY_FILE), exist_ok=True)
@@ -55,21 +74,23 @@ def store_collab_memory(agent_id, task, result):
     save_memory(mem)
 
 def load_memory():
+    mfile = _get_memory_file()
     with MEMORY_LOCK:
         try:
-            os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-            if os.path.exists(MEMORY_FILE):
-                with open(MEMORY_FILE) as f:
+            os.makedirs(os.path.dirname(mfile), exist_ok=True)
+            if os.path.exists(mfile):
+                with open(mfile) as f:
                     return json.load(f)
         except:
             pass
         return {}
 
 def save_memory(data):
+    mfile = _get_memory_file()
     with MEMORY_LOCK:
         try:
-            os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-            with open(MEMORY_FILE, "w") as f:
+            os.makedirs(os.path.dirname(mfile), exist_ok=True)
+            with open(mfile, "w") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return "OK"
         except Exception as e:

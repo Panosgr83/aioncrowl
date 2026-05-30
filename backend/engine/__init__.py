@@ -192,11 +192,57 @@ def mark_engine(engine_id, status, cooldown_secs=60):
             break
     save_engine_status()
 
+# Proactive rate limiting — prevent calling engines too fast
+RATE_LIMITS = {
+    "cerebras": {"max_calls": 30, "window": 60},
+    "sambanova": {"max_calls": 20, "window": 60},
+    "openrouter_deepseek": {"max_calls": 20, "window": 60},
+    "openrouter": {"max_calls": 20, "window": 60},
+    "openrouter_llama": {"max_calls": 20, "window": 60},
+    "groq": {"max_calls": 30, "window": 60},
+    "groq_8b": {"max_calls": 30, "window": 60},
+    "gemini": {"max_calls": 15, "window": 60},
+    "ollama": {"max_calls": 1000, "window": 60},
+}
+
+_call_history = {}
+
+def check_rate_limit(engine_id):
+    now = time.time()
+    limits = RATE_LIMITS.get(engine_id, {"max_calls": 30, "window": 60})
+    history = _call_history.get(engine_id, [])
+    history = [t for t in history if now - t < limits["window"]]
+    _call_history[engine_id] = history
+    if len(history) >= limits["max_calls"]:
+        wait = limits["window"] - (now - history[0]) + 1
+        return False, wait
+    return True, 0
+
+def record_call(engine_id):
+    if engine_id not in _call_history:
+        _call_history[engine_id] = []
+    _call_history[engine_id].append(time.time())
+
+def get_rate_limit_info(engine_id):
+    limits = RATE_LIMITS.get(engine_id, {"max_calls": 30, "window": 60})
+    now = time.time()
+    history = _call_history.get(engine_id, [])
+    recent = [t for t in history if now - t < limits["window"]]
+    allowed, wait = check_rate_limit(engine_id)
+    return {
+        "max_calls": limits["max_calls"],
+        "window_s": limits["window"],
+        "calls_in_window": len(recent),
+        "throttled": not allowed,
+        "wait_seconds": round(wait, 1),
+    }
+
 def get_engine_status():
     now = time.time()
     result = []
     for e in sorted(ENGINES, key=lambda x: x["priority"]):
         status = "active" if not e.get("status") or e["status"] == "active" or e.get("cooldown_until", 0) <= now else e["status"]
+        rl_info = get_rate_limit_info(e["id"])
         result.append({
             "id": e["id"],
             "name": e["name"],
@@ -208,6 +254,7 @@ def get_engine_status():
             "capability": e["capability"],
             "speed_rating": e["speed_rating"],
             "cooldown_until": e.get("cooldown_until", 0),
+            "rate_limit": rl_info,
         })
     return result
 
@@ -216,6 +263,11 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None):
     api_key = get_api_key(engine["id"])
     if not api_key:
         raise ValueError(f"API key not set for {engine['id']}")
+
+    allowed, wait = check_rate_limit(engine["id"])
+    if not allowed:
+        mark_engine(engine["id"], "rate_limited", wait)
+        raise Exception(f"Rate limited: {engine['id']} — retry in {wait:.0f}s")
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     headers.update(engine.get("headers", {}))
@@ -249,6 +301,7 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None):
             mark_engine(engine["id"], "quota_exhausted", 3600)
         raise Exception(f"API error {resp.status_code}: {error_msg}")
 
+    record_call(engine["id"])
     return resp
 
 load_engine_status()
