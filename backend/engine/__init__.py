@@ -89,8 +89,14 @@ def record_engine_perf(engine_id, duration_s, success):
     d["total_time"] += duration_s
     if success:
         d["successes"] += 1
+        _consecutive_failures[engine_id] = 0
     else:
         d["failures"] += 1
+        cf = _consecutive_failures.get(engine_id, 0) + 1
+        _consecutive_failures[engine_id] = cf
+        if cf >= ENGINE_FALLBACK_THRESHOLD:
+            mark_engine(engine_id, "degraded", ENGINE_FALLBACK_COOLDOWN)
+            _consecutive_failures[engine_id] = 0
     d["avg_time"] = round(d["total_time"] / d["calls"], 2)
     d["success_rate"] = round(d["successes"] / d["calls"] * 100, 1)
     d["last_used"] = datetime.now().isoformat()
@@ -206,6 +212,11 @@ RATE_LIMITS = {
 }
 
 _call_history = {}
+
+# Auto fallback — consecutive failure tracking
+_consecutive_failures = {}
+ENGINE_FALLBACK_THRESHOLD = 2
+ENGINE_FALLBACK_COOLDOWN = 300
 
 def check_rate_limit(engine_id):
     now = time.time()

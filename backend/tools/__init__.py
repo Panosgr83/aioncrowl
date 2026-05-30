@@ -7,6 +7,10 @@ PERF_START = {}
 MEMORY_LOCK = threading.Lock()
 ACTIVITY_FILE = os.path.join(AION_DIR, "MEMORY", "activity.jsonl")
 
+# Memory recall cache (30s TTL)
+_recall_cache = {}
+RECALL_CACHE_TTL = 30
+
 def _get_memory_file():
     try:
         from kb import _get_current_project
@@ -571,20 +575,30 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             result = save_memory(mem)
             return f"Αποθηκεύτηκε: {args['key']} = {args['value']}" if result == "OK" else f"Σφάλμα: {result}"
         elif name == "recall":
+            now = time.time()
+            cache_key = args["key"]
+            cached = _recall_cache.get(cache_key)
+            if cached and (now - cached["ts"]) < RECALL_CACHE_TTL:
+                return cached["result"]
             mem = load_memory()
             facts = _get_facts(mem)
             key = args["key"]
             exact = facts.get(key)
             if exact:
                 val = exact["value"] if isinstance(exact, dict) else exact
-                return f"{key}: {val}"
+                result = f"{key}: {val}"
+                _recall_cache[cache_key] = {"result": result, "ts": now}
+                return result
             matches = {}
             for k, v in facts.items():
                 if key.lower() in k.lower():
                     val = v["value"] if isinstance(v, dict) else v
                     matches[k] = val
             if matches:
-                return "\n".join(f"{k}: {v}" for k, v in matches.items())
+                result = "\n".join(f"{k}: {v}" for k, v in matches.items())
+                _recall_cache[cache_key] = {"result": result, "ts": now}
+                return result
+            _recall_cache.pop(cache_key, None)
             return f"Δεν βρέθηκε: {key}"
         elif name == "list_memories":
             mem = load_memory()
