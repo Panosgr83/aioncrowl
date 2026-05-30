@@ -40,34 +40,36 @@ body {
   word-break: break-word;
   color: var(--color-text-primary);
   font-size: inherit;
-  line-height: 1.6;
+  line-height: 1.65;
 }
-.render-html h1, .render-html h2, .render-html h3 {
+.render-html h1, .render-html h2, .render-html h3, .render-html h4 {
   font-weight: 700;
-  margin: 0.75em 0 0.5em;
+  margin: 0.75em 0 0.4em;
   color: var(--color-accent);
+  letter-spacing: -0.01em;
 }
-.render-html h1 { font-size: 1.3em; }
+.render-html h1 { font-size: 1.35em; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.25em; }
 .render-html h2 { font-size: 1.15em; }
 .render-html h3 { font-size: 1.05em; }
+.render-html h4 { font-size: 1em; }
 .render-html code {
-  background: var(--color-app-elevated);
-  padding: 0.15em 0.4em;
+  background: rgba(99, 102, 241, 0.12);
+  padding: 0.15em 0.45em;
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 0.85em;
-  color: var(--color-accent);
+  color: #a5b4fc;
 }
 .render-html pre {
-  background: var(--color-app-elevated);
-  border: 1px solid var(--border-subtle);
+  background: #0d0d1a;
+  border: 1px solid rgba(99, 102, 241, 0.15);
   border-radius: 8px;
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 0.8em;
-  line-height: 1.5;
-  margin: 0.5em 0;
+  line-height: 1.55;
+  margin: 0.6em 0;
 }
 .render-html pre code {
   background: none;
@@ -84,15 +86,38 @@ body {
 .render-html li { margin: 0.2em 0; }
 .render-html strong { font-weight: 600; color: var(--color-text-primary); }
 .render-html em { font-style: italic; }
-.render-html a { color: var(--color-accent); text-decoration: underline; }
+.render-html a { color: #818cf8; text-decoration: underline; text-underline-offset: 2px; }
+.render-html a:hover { color: var(--color-accent); }
 .render-html blockquote {
   border-left: 3px solid var(--color-accent);
   padding-left: 1em;
   margin: 0.5em 0;
   color: var(--color-text-secondary);
+  font-style: italic;
 }
 .render-html hr {
   border: none;
   border-top: 1px solid var(--border-subtle);
   margin: 1em 0;
+}
+.render-html table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+}
+.render-html th, .render-html td {
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 10px;
+  text-align: left;
+}
+.render-html th {
+  background: rgba(99, 102, 241, 0.1);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.render-html img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 0.5em 0;
 }

@@ -1,32 +1,49 @@
 import json, os, time
 from datetime import datetime
+from pathlib import Path
+from kb import _get_current_project
 
-AION_DIR = os.path.expanduser("~/AION")
-MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
-SESSION_DIR = os.path.join(AION_DIR, "aionclaw", "sessions")
 SUMMARY_THRESHOLD = 6
+SESSION_DIR = os.path.join(str(Path.home()), "AION", "aionclaw", "sessions")
 
-def load_memory():
+def _get_memory_path(project=None, must_exist=True):
+    if project:
+        path = Path.home() / "AION" / "MEMORY" / project / "memory.json"
+        if not must_exist or path.exists():
+            return str(path)
+    return str(Path.home() / "AION" / "MEMORY" / "memory.json")
+
+def _get_sessions_dir(project=None):
+    if project:
+        pdir = Path(SESSION_DIR) / project
+        if pdir.exists():
+            return str(pdir)
+    return SESSION_DIR
+
+def load_memory(project=None):
+    path = _get_memory_path(project)
     try:
-        os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-        if os.path.exists(MEMORY_FILE):
-            with open(MEMORY_FILE) as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):
+            with open(path) as f:
                 return json.load(f)
     except:
         pass
     return {}
 
-def save_memory(data):
+def save_memory(data, project=None):
+    path = _get_memory_path(project, must_exist=False)
     try:
-        os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-        with open(MEMORY_FILE, "w") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return True
     except:
         return False
 
-def store_fact(key, value, agent_id="ceo", source="user"):
-    mem = load_memory()
+def store_fact(key, value, agent_id="ceo", source="user", project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     if "facts" not in mem:
         mem["facts"] = {}
     mem["facts"][key] = {
@@ -35,11 +52,12 @@ def store_fact(key, value, agent_id="ceo", source="user"):
         "source": source,
         "updated": datetime.now().isoformat(),
     }
-    save_memory(mem)
+    save_memory(mem, project)
     return True
 
-def recall_fact(key):
-    mem = load_memory()
+def recall_fact(key, project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     facts = mem.get("facts", {})
     exact = facts.get(key)
     if exact:
@@ -50,12 +68,14 @@ def recall_fact(key):
             results[k] = v["value"]
     return results if results else None
 
-def get_all_facts():
-    mem = load_memory()
+def get_all_facts(project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     return mem.get("facts", {})
 
-def store_summary(agent_id, summary_text):
-    mem = load_memory()
+def store_summary(agent_id, summary_text, project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     if "summaries" not in mem:
         mem["summaries"] = {}
     if agent_id not in mem["summaries"]:
@@ -67,15 +87,17 @@ def store_summary(agent_id, summary_text):
     })
     if len(mem["summaries"][agent_id]) > 20:
         mem["summaries"][agent_id] = mem["summaries"][agent_id][-20:]
-    save_memory(mem)
+    save_memory(mem, project)
 
-def get_summaries(agent_id, limit=3):
-    mem = load_memory()
+def get_summaries(agent_id, limit=3, project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     summaries = mem.get("summaries", {}).get(agent_id, [])
     return summaries[-limit:]
 
-def get_context_for_agent(agent_id):
-    mem = load_memory()
+def get_context_for_agent(agent_id, project=None):
+    project = project or _get_current_project()
+    mem = load_memory(project)
     context_parts = []
 
     # 1. Facts (shared across all agents)
@@ -95,7 +117,6 @@ def get_context_for_agent(agent_id):
 
     # 3. CEO gets ALL summaries + recent sessions from ALL agents
     if agent_id == "ceo":
-        # All summaries from all agents
         all_summaries = mem.get("summaries", {})
         for aid, sum_list in all_summaries.items():
             if aid != "ceo" and sum_list:
@@ -103,20 +124,19 @@ def get_context_for_agent(agent_id):
                 for s in sum_list[-3:]:
                     context_parts.append(f"- {s['text']}")
 
-        # Recent sessions from all agents
-        if os.path.exists(SESSION_DIR):
-            files = sorted(os.listdir(SESSION_DIR), reverse=True)[:15]
+        # Recent sessions from project-specific session dir (fallback to root)
+        sessions_dir = _get_sessions_dir(project)
+        if os.path.exists(sessions_dir):
+            files = sorted(os.listdir(sessions_dir), reverse=True)[:15]
             for fname in files:
                 if not fname.endswith(".json"):
                     continue
-                fpath = os.path.join(SESSION_DIR, fname)
+                fpath = os.path.join(sessions_dir, fname)
                 try:
                     with open(fpath) as f:
                         data = json.load(f)
                     msgs = data.get("messages", [])
-                    # Extract agent_id from filename (e.g. "dev_default.json" → "dev")
                     agent_from_file = fname.split("_")[0]
-                    # Get last user+assistant exchange
                     last_pair = []
                     for m in reversed(msgs):
                         if m.get("role") in ("user", "assistant") and len(last_pair) < 2:

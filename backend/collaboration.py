@@ -107,7 +107,7 @@ def save_to_agent_session(agent_id, session_id, user_msg, assistant_msg):
 def run_sub_agent(agent_id, task, context="", engine_override=""):
     from agents import AGENTS, get_agent
     from engine import get_active_engines, call_engine, ENGINES, suggest_engine_for, record_engine_perf
-    from tools import TOOL_DEFINITIONS, execute_tool
+    from tools import TOOL_DEFINITIONS, get_tool_definitions_for_agent, execute_tool
     from performance import get_eta, log_performance
 
     known_ids = {a["id"] for a in AGENTS}
@@ -173,7 +173,8 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
     for engine in engines_to_try:
         try:
             t0 = time_module.time()
-            resp = call_engine(engine, messages, tools=TOOL_DEFINITIONS, stream=False, max_tokens=1024)
+            agent_tools = get_tool_definitions_for_agent(agent_id)
+            resp = call_engine(engine, messages, tools=agent_tools, stream=False, max_tokens=1024)
             t1 = time_module.time()
             record_engine_perf(engine["id"], t1 - t0, True)
             data = resp.json()

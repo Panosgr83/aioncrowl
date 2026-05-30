@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key, suggest_engine_for, record_engine_perf
-from tools import TOOL_DEFINITIONS, execute_tool, read_activity
+from tools import TOOL_DEFINITIONS, get_tool_definitions_for_agent, execute_tool, read_activity
 from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
 from collaboration import bus
@@ -189,7 +189,8 @@ def run_agent(ctx, engine_override=""):
             try:
                 t0 = time.time()
                 msgs = trim_messages(ctx.messages)
-                resp = call_engine(engine, msgs, tools=TOOL_DEFINITIONS if ctx.tools_enabled else None, stream=False)
+                tools_for_call = get_tool_definitions_for_agent(ctx.agent_id) if ctx.tools_enabled else None
+                resp = call_engine(engine, msgs, tools=tools_for_call, stream=False)
                 t1 = time.time()
                 data = resp.json()
                 choice = data["choices"][0]
@@ -867,7 +868,8 @@ async def websocket_chat(ws: WebSocket):
                 engine_used = engine["id"]
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
 
-                resp = call_engine(engine, trim_messages(ctx.messages), tools=TOOL_DEFINITIONS if tools_enabled else None, stream=True)
+                tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
+                resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=True)
 
                 full_content = ""
                 collected_tools = []

@@ -104,6 +104,17 @@ def _ensure_facts(mem):
         mem["facts"] = {}
     return mem["facts"]
 
+def get_tool_definitions_for_agent(agent_id):
+    from agents import AGENTS
+    agent_tools = []
+    for a in AGENTS:
+        if a["id"] == agent_id:
+            agent_tools = a.get("tools", [])
+            break
+    if not agent_tools:
+        return TOOL_DEFINITIONS
+    return [td for td in TOOL_DEFINITIONS if td["function"]["name"] in agent_tools]
+
 TOOL_DEFINITIONS = [
     {
         "type": "function",
