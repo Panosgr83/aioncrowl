@@ -175,7 +175,7 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
         try:
             t0 = time_module.time()
             agent_tools = get_tool_definitions_for_agent(agent_id)
-            resp = call_engine(engine, messages, tools=agent_tools, stream=False, max_tokens=1024)
+            resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type=task_type)
             t1 = time_module.time()
             record_engine_perf(engine["id"], t1 - t0, True)
             data = resp.json()
@@ -250,7 +250,7 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
                 })
 
                 t2 = time_module.time()
-                final_resp = call_engine(engine, messages, stream=False, max_tokens=1024)
+                final_resp = call_engine(engine, messages, stream=False, task_type=task_type)
                 t3 = time_module.time()
                 record_engine_perf(engine["id"], t3 - t2, True)
                 final_data = final_resp.json()

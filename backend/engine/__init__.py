@@ -129,6 +129,12 @@ def get_engine_score(engine, task_type="general"):
     if task_type in ("coding", "reasoning", "tools") and engine["capability"] == "high":
         score += 200
     score += (10 - engine["priority"]) * 10
+    # P2: sambanova boost — fastest available engine
+    if eid == "sambanova":
+        score += 400
+    # P2: groq_8b for simple tasks — very fast capability-medium
+    if task_type == "simple" and eid == "groq_8b":
+        score += 600
     return score
 
 def suggest_engine_for(task_type="general", needs_tools=True):
@@ -269,7 +275,7 @@ def get_engine_status():
         })
     return result
 
-def call_engine(engine, messages, tools=None, stream=False, max_tokens=None):
+def call_engine(engine, messages, tools=None, stream=False, max_tokens=None, task_type=None):
     import requests
     api_key = get_api_key(engine["id"])
     if not api_key:
@@ -282,6 +288,16 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None):
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     headers.update(engine.get("headers", {}))
+
+    if max_tokens is None:
+        if task_type == "simple":
+            max_tokens = 512
+        elif task_type == "reasoning":
+            max_tokens = 1024
+        elif task_type == "coding":
+            max_tokens = 2048
+        else:
+            max_tokens = min(engine.get("max_tokens", 4096), 2048)
 
     body = {
         "model": engine["model"],

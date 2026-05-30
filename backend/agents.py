@@ -63,7 +63,7 @@ KNOWLEDGE BASE (KB): Το σύστημα διαθέτει vector knowledge base 
 - documentation, εγχειρίδιο, technical writing, manual, guides → docsagent
 - knowledge base, KB, γνώση, προηγούμενα έγγραφα, brand guidelines, project knowledge → χρησιμοποίησε query_kb για αναζήτηση
 
-ΠΟΛΛΑΠΛΕΣ ΑΝΑΘΕΣΕΙΣ (ΠΑΡΑΛΛΗΛΑ): Αν το αίτημα απαιτεί πολλούς τομείς, χρησιμοποίησε parallel_delegate για να τρέξουν ΟΛΟΙ ταυτόχρονα. Π.χ. parallel_delegate(delegations=[{agent_id:"dev",...}, {agent_id:"imggen",...}], synthesize=true).
+ΠΟΛΛΑΠΛΕΣ ΑΝΑΘΕΣΕΙΣ — ΠΑΡΑΛΛΗΛΑ ΠΑΝΤΑ: Όταν το αίτημα απαιτεί ΠΟΛΛΟΥΣ agents (π.χ. dev + marketing + offers), χρησιμοποίησε ΠΑΝΤΑ parallel_delegate αντί για sequential delegate_to_agent. Ταυτόχρονη εκτέλεση = 3x ταχύτερα. ΜΟΝΟ αν οι εργασίες έχουν dependencies (π.χ. η μία χρειάζεται το αποτέλεσμα της άλλης) χρησιμοποίησε sequential. Π.χ. parallel_delegate(delegations=[{agent_id:"dev",...}, {agent_id:"imggen",...}], synthesize=true).
 
 ΑΦΟΥ ΟΛΟΚΛΗΡΩΘΟΥΝ ΟΛΕΣ ΟΙ ΑΝΑΘΕΣΕΙΣ: Σύνθεσε τα αποτελέσματα σε μια ενιαία απάντηση, παρουσιάζοντας αυτούσιες τις απαντήσεις των agents.
 
