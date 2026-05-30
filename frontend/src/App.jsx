@@ -642,34 +642,34 @@ function App() {
 
   const agentThinks = (ev) => {
     const icon = agents.find(a=>a.id===ev.agent_id)?.icon||'🤖'
-    const colors = {started:'border-blue-800/30 bg-blue-900/10',
-      thinking:'border-indigo-800/30 bg-indigo-900/10',
+    const colors = {started:'border-blue-800/30 bg-blue-950/30',
+      thinking:'border-indigo-800/30 bg-indigo-950/30',
       synthesizing:'border-accent/30 bg-accent/10',
       complete:'border-success/30 bg-success/10',
-      error:'border-red-800/30 bg-red-900/10'}
+      error:'border-error/30 bg-error/10'}
     const pulses = {started:'bg-blue-400',thinking:'bg-indigo-400',synthesizing:'bg-accent'}
-    const c = colors[ev.status]||'border-gray-800/30 bg-gray-900/10'
+    const c = colors[ev.status]||'border-app-elevated/30 bg-app-elevated/10'
     const p = pulses[ev.status]
     return (
       <div key={ev.id||ev._ts} className={`rounded-lg p-2 border ${c} transition-all duration-300`}>
         <div className="flex items-center gap-1.5 mb-0.5">
           <span className="text-xs">{icon}</span>
-          <span className="text-[10px] font-medium text-gray-400">{ev.agent_id}</span>
+          <span className="text-[10px] font-medium text-text-secondary">{ev.agent_id}</span>
           {p&&<span className={`w-1.5 h-1.5 rounded-full ${p} animate-pulse ml-auto`}/>}
           {ev.status==='complete'&&<span className="text-[9px] text-success ml-auto">✓</span>}
-          {ev.status==='error'&&<span className="text-[9px] text-red-500 ml-auto">✕</span>}
+          {ev.status==='error'&&<span className="text-[9px] text-error ml-auto">✕</span>}
         </div>
-        <div className="text-[10px] text-gray-400 leading-relaxed">{ev.thought}</div>
+        <div className="text-[10px] text-text-secondary leading-relaxed">{ev.thought}</div>
         {ev.remaining_seconds>0&&ev.status!=='complete'&&ev.status!=='error'&&(
           <div className="mt-1 flex items-center gap-2">
-            <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
+            <div className="flex-1 h-1 bg-app-elevated rounded-full overflow-hidden">
               <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,ev.progress||50)}%`}}/>
             </div>
-            <span className="text-[9px] text-accent shrink-0">~{ev.remaining_seconds}s</span>
+            <span className="text-[9px] text-accent/80 shrink-0">~{ev.remaining_seconds}s</span>
           </div>
         )}
-        {ev.duration_s&&<div className="text-[9px] text-success mt-0.5">{ev.duration_s}s</div>}
-        <div className="text-[8px] text-gray-700 mt-0.5">{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+        {ev.duration_s&&<div className="text-[9px] text-success/80 mt-0.5">{ev.duration_s}s</div>}
+        <div className="text-[8px] text-text-dim mt-0.5">{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
       </div>
     )
   }
@@ -805,7 +805,7 @@ function App() {
         {/* CHAT AREA */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Chat header */}
-          <div className="flex items-center gap-3 px-6 py-2 border-b border-gray-800 bg-gray-900/50 text-xs shrink-0">
+          <div className="flex items-center gap-3 px-6 py-2 border-b border-app-elevated bg-app-surface/50 text-xs shrink-0">
             <span className="text-lg">{currentAgent?.icon}</span>
             <div>
               <span className="text-accent font-medium">{currentAgent?.name}</span>
@@ -909,21 +909,22 @@ function App() {
 
             {taskProgress && taskProgress.status !== 'complete' && (
               <div className="flex justify-start">
-                <div className="w-full max-w-md bg-gray-800/60 rounded-xl p-3 border border-accent/50">
-                  <div className="flex items-center gap-2 text-xs text-gray-400 mb-1.5">
+                <div className="w-full max-w-md bg-app-surface/60 rounded-xl p-3 border border-accent/30">
+                  <div className="flex items-center gap-2 text-xs text-text-secondary mb-1.5">
                     <span className="text-sm">{agents.find(a=>a.id===taskProgress.agent_id)?.icon||'🤖'}</span>
                     <span>{taskProgress.message}</span>
                     <span className="ml-auto text-accent">{taskProgress.progress}%</span>
                   </div>
-                  <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-accent to-accent-dim rounded-full transition-all duration-500" style={{width:`${taskProgress.progress}%`}} />
+                  <div className="h-1.5 bg-app-elevated rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-accent to-accent-dim rounded-full transition-all duration-500"
+                      style={{width:`${taskProgress.progress}%`}} />
                   </div>
                   {taskProgress.remaining_seconds > 0 && (
                     <div className="flex items-center gap-2 mt-1">
-                      <div className="flex-1 h-0.5 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="flex-1 h-0.5 bg-app-elevated rounded-full overflow-hidden">
                         <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,taskProgress.progress)}%`}}/>
                       </div>
-                      <span className="text-[10px] text-accent shrink-0">~{taskProgress.remaining_seconds}s remaining</span>
+                      <span className="text-[10px] text-accent/80 shrink-0">~{taskProgress.remaining_seconds}s</span>
                     </div>
                   )}
                 </div>
@@ -932,13 +933,14 @@ function App() {
 
             {taskProgress && taskProgress.status === 'complete' && taskProgress.duration_s && (
               <div className="flex justify-start">
-                <div className="bg-gray-800/40 rounded-xl px-3 py-2 border border-success/30 text-xs text-gray-400 flex items-center gap-2">
+                <div className="bg-app-surface rounded-xl px-3 py-2 border border-success/30 text-xs text-text-secondary flex items-center gap-2">
                   <span>✅ {agents.find(a=>a.id===taskProgress.agent_id)?.icon} {taskProgress.agent_id}</span>
                   <span className="text-success">{taskProgress.duration_s}s</span>
                 </div>
               </div>
             )}
           </div>
+
 
           {pendingApprovals.length > 0 && (
             <div className="border-t border-warning/30 bg-warning/5 p-3">
@@ -995,85 +997,88 @@ function App() {
         </div>
 
         {/* RIGHT SIDEBAR - Team Activity */}
+        {/* CONTEXT DRAWER — overlay from right */}
         {showCollab && (
-          <div className="w-64 bg-gray-900/80 border-l border-gray-800 flex flex-col shrink-0">
-            <div className="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 uppercase font-medium flex items-center justify-between gap-2">
-              <span>Team Activity</span>
-              <div className="flex items-center gap-1">
-                <button onClick={()=>{setShowProjectInput(!showProjectInput)}} className="text-gray-600 hover:text-accent transition-colors text-[10px]" title="New project">✏️</button>
-                <button onClick={clearCollab} className="text-gray-600 hover:text-red-400 transition-colors text-[10px]" title="Clear activity">✕</button>
+          <>
+            <div className="fixed inset-0 z-40" onClick={()=>setShowCollab(false)} />
+            <div className="fixed right-0 top-0 bottom-0 w-80 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
+              <div className="px-4 py-3 border-b border-app-elevated text-xs flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-text-secondary uppercase font-medium tracking-wider text-[10px]">Context</span>
+                  {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
+                    <span className="flex items-center gap-1 text-accent/70 text-[9px]">
+                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"/>
+                      live
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={()=>{setShowProjectInput(!showProjectInput)}} className="text-text-dim hover:text-accent transition-colors text-[10px]" title="New project">✦</button>
+                  <button onClick={clearCollab} className="text-text-dim hover:text-error transition-colors text-[10px]" title="Clear">✕</button>
+                  <button onClick={()=>setShowCollab(false)} className="text-text-dim hover:text-text-primary transition-colors text-xs ml-1">✕</button>
+                </div>
               </div>
-            </div>
-            {showProjectInput && (
-              <form onSubmit={async (e) => {
-                e.preventDefault(); const name = e.target.project.value.trim(); if (!name) return
-                try {
-                  const r = await fetch(`${API}/api/project`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})})
-                  const d = await r.json()
-                  if (d.current) setCurrentProject(d.current); if (d.projects) setAllProjects(d.projects)
-                } catch(_) {}
-                setShowProjectInput(false); setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
-              }} className="flex gap-1 p-2 border-b border-gray-800">
-                <input name="project" placeholder="project name..." className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-accent"/>
-              </form>
-            )}
-
-            {/* Agent Thinking section - always visible */}
-            <div className="border-b border-gray-800">
-              <div className="px-3 py-1.5 text-[9px] text-gray-600 uppercase tracking-wider font-medium flex items-center gap-2">
-                <span>Live Activity</span>
-                {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
-                  <span className="flex items-center gap-1 text-amber-400">
-                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/>
-                    active
-                  </span>
-                )}
-              </div>
-              <div className="px-2 py-1 space-y-1 max-h-[250px] overflow-y-auto">
-                {recentThinking.length === 0 ? (
-                  <div className="text-center py-4 text-gray-700 text-[10px]">Waiting for agent activity...</div>
-                ) : (
-                  recentThinking.map((ev, i) => agentThinks({...ev, id: ev.id||i, _ts: ev._ts||i}))
-                )}
-              </div>
-            </div>
-
-            <div ref={collabRef} className="flex-1 overflow-y-auto p-2 space-y-1">
-              {collabEvents.length === 0 && (
-                <div className="text-center py-8 text-gray-600 text-xs">No activity yet.<br/>Send a message to start collaboration.</div>
+              {showProjectInput && (
+                <form onSubmit={async (e) => {
+                  e.preventDefault(); const name = e.target.project.value.trim(); if (!name) return
+                  try {
+                    const r = await fetch(`${API}/api/project`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})})
+                    const d = await r.json()
+                    if (d.current) setCurrentProject(d.current); if (d.projects) setAllProjects(d.projects)
+                  } catch(_) {}
+                  setShowProjectInput(false); setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
+                }} className="flex gap-1 p-2 border-b border-app-elevated">
+                  <input name="project" placeholder="project name..." className="flex-1 bg-app-elevated border border-app-elevated rounded px-2 py-1 text-[10px] text-text-primary placeholder-text-dim focus:outline-none focus:border-accent"/>
+                </form>
               )}
-              {[...collabEvents].reverse().map((ev, ri) => {
-                if (ev.type === 'agent_thinking') return null
-                const isRead = readEvents.includes(ev.id)
-                const fromAgent = agents.find(a => a.id === ev.from)
-                const toAgent = agents.find(a => a.id === ev.to)
-                return (
-                  <button key={ev.id||ri} onClick={()=>{
-                    if (ev.id) fetch(`${API}/api/collab/events/${ev.id}/read`, {method:'POST'}).catch(()=>{})
-                    setReadEvents(prev => prev.includes(ev.id) ? prev : [...prev, ev.id])
-                    if (ev.to) navigateToAgent(ev.to === 'ceo' ? ev.from : ev.to, 'default')
-                  }}
-                    className={`w-full text-left rounded-lg p-2 border transition-colors ${isRead ? 'bg-gray-900/30 border-gray-800/30' : 'bg-gray-800/40 border-gray-800 hover:bg-gray-700/50'}`}>
-                    <div className={`flex items-center gap-1.5 mb-0.5 ${isRead ? 'opacity-40' : ''}`}>
-                      <span className="text-sm">{fromAgent?.icon||'🤖'}</span>
-                      <span className={`text-[10px] font-medium ${isRead ? 'text-gray-600 line-through' : 'text-gray-400'}`}>{fromAgent?.name||ev.from}{ev.to?` → ${toAgent?.name||ev.to}`:''}</span>
-                      <span className={`ml-auto w-2 h-2 rounded-full ${activeAgents[ev.from]==='writing'||activeAgents[ev.to]==='writing'?'bg-success/60 animate-pulse':activeAgents[ev.from]==='has_response'?'bg-success':'bg-gray-600'}`} />
-                    </div>
-                    <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-gray-600' : ev.action === 'delegate' ? 'text-amber-300' : ev.action === 'result' ? 'text-success/70' : ev.type === 'task_progress' ? 'text-accent/80' : 'text-gray-300'}`}>
-                      {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
-                    </div>
-                    <div className={`text-[11px] mt-0.5 line-clamp-2 ${isRead ? 'text-gray-600 line-through opacity-40' : 'text-gray-400'}`}>{ev.content||ev.thought||ev.message||''}</div>
-                    <div className={`text-[9px] mt-0.5 ${isRead ? 'text-gray-700' : 'text-gray-600'}`}>{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
-                  </button>
-                )
-              })}
+
+              <div className="border-b border-app-elevated">
+                <div className="px-4 py-2 text-[9px] text-text-dim uppercase tracking-wider font-medium">Live Activity</div>
+                <div className="px-2 pb-2 space-y-1 max-h-[250px] overflow-y-auto">
+                  {recentThinking.length === 0 ? (
+                    <div className="text-center py-4 text-text-dim text-[10px]">Waiting for agent activity...</div>
+                  ) : (
+                    recentThinking.map((ev, i) => agentThinks({...ev, id: ev.id||i, _ts: ev._ts||i}))
+                  )}
+                </div>
+              </div>
+
+              <div ref={collabRef} className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+                {collabEvents.length === 0 && (
+                  <div className="text-center py-8 text-text-dim text-[10px]">No activity yet.</div>
+                )}
+                {[...collabEvents].reverse().map((ev, ri) => {
+                  if (ev.type === 'agent_thinking') return null
+                  const isRead = readEvents.includes(ev.id)
+                  const fromAgent = agents.find(a => a.id === ev.from)
+                  const toAgent = agents.find(a => a.id === ev.to)
+                  return (
+                    <button key={ev.id||ri} onClick={()=>{
+                      if (ev.id) fetch(`${API}/api/collab/events/${ev.id}/read`, {method:'POST'}).catch(()=>{})
+                      setReadEvents(prev => prev.includes(ev.id) ? prev : [...prev, ev.id])
+                      if (ev.to) navigateToAgent(ev.to === 'ceo' ? ev.from : ev.to, 'default')
+                    }}
+                      className={`w-full text-left rounded-lg p-2 border transition-colors ${isRead ? 'bg-transparent border-transparent' : 'bg-app-elevated/60 border-app-elevated hover:bg-app-elevated'}`}>
+                      <div className={`flex items-center gap-1.5 mb-0.5 ${isRead ? 'opacity-40' : ''}`}>
+                        <span className="text-sm">{fromAgent?.icon||'🤖'}</span>
+                        <span className={`text-[10px] font-medium ${isRead ? 'text-text-dim line-through' : 'text-text-secondary'}`}>{fromAgent?.name||ev.from}{ev.to?` → ${toAgent?.name||ev.to}`:''}</span>
+                      </div>
+                      <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-text-dim' : ev.action === 'delegate' ? 'text-warning' : ev.action === 'result' ? 'text-success/70' : ev.type === 'task_progress' ? 'text-accent/80' : 'text-text-secondary'}`}>
+                        {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
+                      </div>
+                      <div className={`text-[10px] mt-0.5 line-clamp-2 ${isRead ? 'text-text-dim line-through opacity-40' : 'text-text-dim'}`}>{ev.content||ev.thought||ev.message||''}</div>
+                      <div className={`text-[8px] mt-0.5 ${isRead ? 'text-text-dim/30' : 'text-text-dim'}`}>{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
       {/* BOTTOM STATUS BAR */}
-      <div className="h-6 bg-gray-900 border-t border-gray-800 flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-red-500'}`} />
+      <div className="h-6 bg-app-surface border-t border-app-elevated flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-error'}`} />
         <span className="text-gray-600 shrink-0">{wsStatus}</span>
         <div className="h-3 w-px bg-gray-800 shrink-0" />
         {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
