@@ -176,7 +176,7 @@ function App() {
     if (!infoInput.trim()) return
     const sid = activeSession?.sessionId||'default'; const aid = activeAgent
     const it = infoInput; setShowInfoInput(false); setInfoInput('')
-    setMessages(prev => [...prev, {role:'system',content:`📝 Συμπληρωματική πληροφορία: ${it}`,ts:new Date().toISOString(),_aid:aid,_sid:sid}])
+    setMessages(prev => [...prev, {role:'system',content:`📝 Συμπληρωματική πληροφορία: ${it}`,ts:new Date().toISOString(),_aid:aid,_sid:sid,_sysType:'info'}])
     setTimeout(() => sendMessageRef.current(`continue with additional info: ${it}`), 100)
   }, [infoInput, activeAgent, activeSession])
 
@@ -324,12 +324,12 @@ function App() {
               setMessages(prev => {
                 const exists = prev.some(m => m._aid === data.agent_id && m.role === 'system' && m.content?.includes('ξεκινά'))
                 if (exists) return prev
-                return [...prev, {role:'system', content:`⏳ ${a?.icon||''} ${a?.name||data.agent_id} ξεκινά εργασία... (εκτίμ. ${data.estimated_seconds||'?'}s)`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString()}]
+                return [...prev, {role:'system', content:`⏳ ${a?.icon||''} ${a?.name||data.agent_id} ξεκινά εργασία... (εκτίμ. ${data.estimated_seconds||'?'}s)`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString(), _sysType: 'thinking'}]
               })
             }
             if (data.status === 'complete' && data.agent_id !== activeAgentRef.current) {
               const a = agents.find(x => x.id === data.agent_id)
-              setMessages(prev => [...prev, {role:'system', content:`✅ ${a?.icon||''} ${a?.name||data.agent_id} ολοκλήρωσε σε ${data.duration_s||'?'}s`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString()}])
+              setMessages(prev => [...prev, {role:'system', content:`✅ ${a?.icon||''} ${a?.name||data.agent_id} ολοκλήρωσε σε ${data.duration_s||'?'}s`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString(), _sysType: 'info'}])
             }
           } else if (data.type === 'agent_chat') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
@@ -840,8 +840,8 @@ function App() {
 
             {displayMessages.map((msg,i)=>msg?(
               <div key={i} className={`flex ${msg.role==='user'?'justify-end':msg.role==='system'?'justify-center':'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/20':msg.role==='system'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-app-surface text-text-secondary text-xs font-mono border border-app-elevated':'bg-app-surface text-text-primary border-l-2 border-accent'}`}>
-                  {msg.role==='system'&&<div className="whitespace-pre-wrap">{msg.content}</div>}
+                <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/20':msg.role==='system'?msg._sysType==='thinking'?'bg-accent/5 text-accent/70 text-[10px] rounded-full px-4 py-1 border border-accent/10':msg._sysType==='warning'?'bg-warning/10 text-warning text-[10px] rounded-full px-3 py-1 border border-warning/30':'bg-transparent text-text-dim text-[10px]':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-app-surface text-text-secondary text-xs font-mono border border-app-elevated':'bg-app-surface text-text-primary border-l-2 border-accent'}`}>
+                  {msg.role==='system'&&<div className={`whitespace-pre-wrap ${msg._sysType==='thinking'?'text-accent/70':msg._sysType==='warning'?'text-warning':'text-text-dim italic'}`}>{msg.content}</div>}
                   {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-warning rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-text-dim rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-warning text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
                   {msg.role==='tool_result'&&<><div className="text-text-dim mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
                   {(msg.role==='assistant'||msg.role==='user')&&<div className="whitespace-pre-wrap">{msg.content}</div>}
@@ -972,7 +972,7 @@ function App() {
                     const r = await fetch(`${API}/api/agents/${activeAgent}/upload`, {method:'POST', body:form})
                     if (r.ok) {
                       const d = await r.json()
-                      setMessages(prev => [...prev, {role:'system', content:`📎 Ανέβηκε το αρχείο: ${d.filename}`, _aid:activeAgent, _sid:activeSession?.sessionId||'default'}])
+                      setMessages(prev => [...prev, {role:'system', content:`📎 Ανέβηκε το αρχείο: ${d.filename}`, _aid:activeAgent, _sid:activeSession?.sessionId||'default', _sysType:'info'}])
                       const r2 = await fetch(`${API}/api/agents/${activeAgent}/files`)
                       const d2 = await r2.json()
                       setAgentFiles(prev => ({...prev, [activeAgent]: d2.files||[]}))
