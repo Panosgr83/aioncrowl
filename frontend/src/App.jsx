@@ -404,6 +404,14 @@ function App() {
                   !prev.some(p => p._aid === m._aid && p._sid === m._sid &&
                     p.content === m.content && p.role === m.role)
                 ).map(m => ({...m, ts: m.ts || new Date().toISOString()}))
+                // Also add delegate responses to CEO's session so they're visible in CEO chat
+                if (activeAgentRef.current === 'ceo' && data.agent_id !== 'ceo') {
+                  const ceoMsgs = data.exchange.filter(m =>
+                    !prev.some(p => p._aid === 'ceo' && p._sid === m._sid &&
+                      p.content === m.content && p.role === m.role)
+                  ).map(m => ({...m, _aid: 'ceo', ts: m.ts || new Date().toISOString()}))
+                  return [...prev, ...newMsgs, ...ceoMsgs]
+                }
                 return [...prev, ...newMsgs]
               })
             }
@@ -872,6 +880,34 @@ img{max-width:100%;height:auto}`
                   )
                 })}
               </div>
+
+              {/* Working Team — live delegation status */}
+              {thinkingEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing') && (
+                <div className="border-t border-amber-500/20 mx-2 pt-1.5 pb-1">
+                  <div className="text-[9px] text-amber-400/70 uppercase tracking-wider font-medium px-1 mb-1">⚡ Working Team</div>
+                  <div className="space-y-0.5 px-1">
+                    {agents.filter(a => thinkingEvents.some(e => e.agent_id === a.id && (e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing'))).map(a => {
+                      const evs = thinkingEvents.filter(e => e.agent_id === a.id)
+                      const last = evs[evs.length - 1]
+                      const isThinking = last?.status === 'thinking' || last?.status === 'started'
+                      const duration = last?.started_at ? Math.floor((Date.now() - new Date(last.started_at).getTime()) / 1000) : 0
+                      return (
+                        <div key={a.id} className="flex items-center gap-1.5 py-1 px-1.5 rounded bg-amber-500/5 border border-amber-500/10 text-[10px]">
+                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse shrink-0" />
+                          <span className="shrink-0">{a.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1">
+                              <span className="text-amber-300 font-medium truncate">{a.name}</span>
+                              <span className="text-amber-500/60 ml-auto">{duration}s</span>
+                            </div>
+                            {isThinking && last?.thought && <div className="text-[8px] text-amber-400/60 truncate">{last.thought.slice(0,60)}</div>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
 
             </div>
           )}
