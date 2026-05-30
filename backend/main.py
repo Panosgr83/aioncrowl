@@ -185,6 +185,8 @@ def run_agent(ctx, engine_override=""):
 
     last_error = ""
     for engine in engines_to_try:
+        if ctx.tools_enabled and not engine.get("supports_tools", False):
+            continue
         for attempt in range(2):
             try:
                 t0 = time.time()
@@ -908,14 +910,23 @@ async def websocket_chat(ws: WebSocket):
         engine_used = "none"
 
         for engine in engines_to_try:
+            if tools_enabled and not engine.get("supports_tools", False):
+                continue
             try:
                 t0 = time.time()
                 engine_used = engine["id"]
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
+                bus.broadcast({
+                    "type": "agent_thinking",
+                    "agent_id": agent_id,
+                    "status": "started",
+                    "thought": f"⏳ {agent_id}: επεξεργάζεται μέσω {engine['id']}...",
+                    "ts": datetime.now().isoformat(),
+                })
 
                 tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
 
-                # Step 1: Non-streaming call to get tool calls (streaming doesn't deliver tool_calls)
+                # Step 1: Non-streaming call to get tool calls
                 init_resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=False)
                 init_data = init_resp.json()
                 init_choice = init_data["choices"][0]
@@ -994,7 +1005,6 @@ async def websocket_chat(ws: WebSocket):
                     await ws_send({"type": "delta", "content": init_content, "ts": datetime.now().isoformat()})
                     ctx.add_message("assistant", init_content)
                     response_text = init_content
-                    ctx.add_message("assistant", full_content)
 
                 if needs_summary(ctx.messages):
                     try:
@@ -1025,7 +1035,7 @@ async def websocket_chat(ws: WebSocket):
                     "session_id": session_id.split(":", 1)[-1] if ":" in session_id else session_id,
                     "exchange": [
                         {"role": "user", "content": data.get("message", ""), "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
-                        {"role": "assistant", "content": (response_text or full_content or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
+                        {"role": "assistant", "content": (response_text or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
                     ]
                 })
                 await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})

@@ -23,10 +23,10 @@ ENGINES = [
      "priority": 1, "supports_tools": True, "max_tokens": 8192, "cooldown_until": 0, "headers": {},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
     {"id": "sambanova", "name": "SambaNova DeepSeek V3.1", "base_url": "https://api.sambanova.ai/v1", "model": "DeepSeek-V3.1",
-     "priority": 2, "supports_tools": True, "max_tokens": 131072, "cooldown_until": 0, "headers": {},
-     "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
+     "priority": 2, "supports_tools": False, "max_tokens": 131072, "cooldown_until": 0, "headers": {},
+     "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning"]},
     {"id": "openrouter_deepseek", "name": "DeepSeek V4 Flash (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-v4-flash:free",
-     "priority": 3, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
+     "priority": 1, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
     {"id": "openrouter", "name": "OpenRouter Owl Alpha", "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/owl-alpha",
      "priority": 4, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
@@ -113,13 +113,15 @@ def get_engine_score(engine, task_type="general"):
     score = 0
     p = perf.get(eid, {})
     calls = p.get("calls", 0)
+    # Weight performance by statistical significance (capped at 10 calls)
+    weight = min(calls / 10.0, 1.0) if calls > 0 else 1.0
     if calls > 0:
         success_rate = p.get("success_rate", 100)
         avg_time = p.get("avg_time", 20)
-        score += success_rate * 10
-        score += max(0, 200 - avg_time * 10)
-    else:
-        score += 500
+        # Only add weighted performance; new engines get a flat bonus
+        score += success_rate * 10 * weight
+        score += max(0, 200 - avg_time * 10) * weight
+    score += 500  # flat new-engine base for ALL engines, weighted performance on top
     if task_type in engine.get("suitable_for", []):
         score += 300
     speed = SPEED_WEIGHTS.get(engine.get("speed_rating", "medium"), 3)
@@ -129,13 +131,13 @@ def get_engine_score(engine, task_type="general"):
     if task_type in ("coding", "reasoning", "tools") and engine["capability"] == "high":
         score += 200
     score += (10 - engine["priority"]) * 10
-    # P2: prefer engines that actually work with OpenAI tool format
+    # Prefer proven tool-capable engines over sambanova/cerebras/gemini
     if eid in ("openrouter", "openrouter_deepseek", "openrouter_llama", "groq", "groq_8b"):
         score += 600
-    # openrouter_deepseek is the best overall (fast + tools + high cap + free)
+    # openrouter_deepseek is fast + tools + free — highest priority
     if eid == "openrouter_deepseek":
-        score += 600
-    # P2: groq_8b for simple tasks — very fast
+        score += 300
+    # groq_8b for simple tasks — very fast
     if task_type == "simple" and eid == "groq_8b":
         score += 600
     return score
