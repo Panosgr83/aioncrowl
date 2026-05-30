@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import SettingsPanel from './components/SettingsPanel'
 import FileBrowser from './components/FileBrowser'
 import LeadsPanel from './components/LeadsPanel'
@@ -92,8 +92,6 @@ function App() {
   const [allProjects, setAllProjects] = useState(['default'])
   const [showProjectInput, setShowProjectInput] = useState(false)
   const [currentTool, setCurrentTool] = useState(null)
-  const [performanceData, setPerformanceData] = useState(null)
-  const [showPerformance, setShowPerformance] = useState(false)
   const [showActivity, setShowActivity] = useState(false)
   const [activityLog, setActivityLog] = useState([])
   const [showCollab, setShowCollab] = useState(true)
@@ -141,6 +139,12 @@ function App() {
     } catch (e) {}
   }, [])
 
+  const debounceRef = useRef(null)
+  const debouncedSave = useCallback((fullKey, msgs) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => saveMessages(fullKey, msgs), 500)
+  }, [saveMessages])
+
   const loadMessages = useCallback(async (fullKey) => {
     try {
       setLoadingHistory(true)
@@ -173,10 +177,10 @@ function App() {
 
   const currentAgent = agents.find(a => a.id === activeAgent)
   const agentSessions = sessions[activeAgent] || []
-  const displayMessages = groupToolCalls(messages.filter(m =>
+  const displayMessages = useMemo(() => groupToolCalls(messages.filter(m =>
     m._aid === activeAgent && m._sid === (activeSession?.sessionId || 'default')
-  ))
-  const recentThinking = thinkingEvents.slice(-5).reverse()
+  )), [messages, activeAgent, activeSession])
+  const recentThinking = useMemo(() => thinkingEvents.slice(-5).reverse(), [thinkingEvents])
 
   const stopGeneration = useCallback(() => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
@@ -211,7 +215,7 @@ function App() {
     pendingRef.current = {agentId:aid,sessionId:sid}
     setMessages(prev => {
       const updated = [...prev, {role:'user', content:text, _aid:aid, _sid:sid, ts:new Date().toISOString()}]
-      saveMessages(`${aid}:${sid}`, updated.filter(m => m._aid===aid && m._sid===sid))
+      debouncedSave(`${aid}:${sid}`, updated.filter(m => m._aid===aid && m._sid===sid))
       return updated
     })
     setInput(''); setTyping(true); setCurrentEngine(''); setCurrentTool(null)
@@ -286,7 +290,7 @@ function App() {
           setAgentHighlights(prev=>({...prev,[aid]:Date.now()}))
           setMessages(prev => {
             const targetMsgs = prev.filter(m => m._aid===aid && m._sid===sid)
-            if (targetMsgs.length > 0) saveMessages(`${aid}:${sid}`, targetMsgs)
+            if (targetMsgs.length > 0) debouncedSave(`${aid}:${sid}`, targetMsgs)
             return prev
           })
           break
@@ -426,12 +430,7 @@ function App() {
     setActiveAgent(agentId); setActiveSession({agentId,sessionId})
     setSelectedEngine(''); setCurrentEngine(''); setShowInfoInput(false)
     const msgs = (await loadMessages(`${agentId}:${sessionId}`)).map(m => ({...m, ts: m.ts || new Date().toISOString()}))
-    setMessages(prev => {
-      // Merge: keep existing in-memory messages, only add server messages not already present
-      const existingKeys = new Set(prev.map(m => `${m.role}|${(m.content||'').slice(0,50)}`))
-      const toAdd = msgs.filter(m => !existingKeys.has(`${m.role}|${(m.content||'').slice(0,50)}`))
-      return [...prev, ...toAdd]
-    })
+    setMessages(msgs)
   }, [activeAgent, activeSession])
 
   const switchAgent = (agentId) => {
@@ -563,71 +562,6 @@ img{max-width:100%;height:auto}`
     setCopiedIndex(idx)
     setTimeout(() => setCopiedIndex(null), 1500)
   }, [toWordHtml])
-
-  const activityPanel = showActivity ? (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowActivity(false)}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900">
-          <span className="text-xs font-medium text-emerald-400">📋 Audit Trail</span>
-          <button onClick={()=>setShowActivity(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
-        </div>
-        <div className="p-2 text-xs">
-          {activityLog.length === 0 ? (
-            <div className="text-center py-8 text-gray-600">No activity recorded yet</div>
-          ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="text-[9px] text-gray-600 uppercase border-b border-gray-800">
-                  <th className="text-left py-2 px-2">Time</th>
-                  <th className="text-left py-2 px-2">Agent</th>
-                  <th className="text-left py-2 px-2">Tool</th>
-                  <th className="text-left py-2 px-2">Args</th>
-                  <th className="text-left py-2 px-2">Result</th>
-                  <th className="text-center py-2 px-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...activityLog].reverse().map((e,i) => (
-                  <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                    <td className="py-1.5 px-2 text-[9px] text-gray-500 whitespace-nowrap font-mono">{e.ts?.slice(11,19)}</td>
-                    <td className="py-1.5 px-2 text-[10px] text-gray-300">{e.agent}</td>
-                    <td className="py-1.5 px-2 text-[10px] text-accent">{e.tool}</td>
-                    <td className="py-1.5 px-2 text-[9px] text-gray-500 max-w-[160px] truncate">{e.args}</td>
-                    <td className="py-1.5 px-2 text-[9px] text-gray-500 max-w-[200px] truncate">{e.result}</td>
-                    <td className="py-1.5 px-2 text-center">{e.success ? <span className="text-success text-[10px]">✓</span> : <span className="text-red-500 text-[10px]">✗</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <div className="px-4 py-3 border-t border-gray-700 flex gap-2">
-          <button onClick={async()=>{try{const r=await fetch(`${API}/api/activity`);const d=await r.json();setActivityLog(d.entries||[])}catch(_){}}}
-            className="text-[10px] text-gray-500 hover:text-gray-300">Refresh</button>
-          <button onClick={()=>setShowActivity(false)}
-            className="text-[10px] text-emerald-400 hover:text-emerald-300 ml-auto">Close</button>
-        </div>
-      </div>
-    </div>
-  ) : null
-
-  const perfPanel = showPerformance && performanceData ? (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowPerformance(false)}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-lg w-full mx-4 max-h-[70vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900">
-          <span className="text-xs font-medium text-accent">⚡ Performance Report</span>
-          <button onClick={()=>setShowPerformance(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
-        </div>
-        <div className="p-4 text-xs text-gray-300 font-mono whitespace-pre-wrap leading-relaxed">{performanceData.report}</div>
-        <div className="px-4 py-3 border-t border-gray-700 flex gap-2">
-          <button onClick={async()=>{try{const r=await fetch(`${API}/api/performance`);setPerformanceData(await r.json())}catch(_){}}}
-            className="text-[10px] text-gray-500 hover:text-gray-300">Refresh</button>
-          <button onClick={()=>{setShowPerformance(false)}}
-            className="text-[10px] text-accent hover:text-accent/80 ml-auto">Close</button>
-        </div>
-      </div>
-    </div>
-  ) : null
 
   const knowledgePanel = showKnowledge ? (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowKnowledge(false)}>
@@ -807,33 +741,17 @@ img{max-width:100%;height:auto}`
 
   return (
     <div className="h-screen flex flex-col bg-app-base text-text-primary font-sans overflow-hidden">
-      {/* TOP PROJECT BAR */}
+      {/* TOP BAR */}
       <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
         <span className="text-accent font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success animate-pulse':'bg-red-500'}`} />
+        <span className="text-[10px] text-gray-600 shrink-0">{currentProject !== 'default' ? currentProject.replace(/_/g, ' ') : ''}</span>
         <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
-        {allProjects.filter(p => p !== 'default').map(p => (
-          <button key={p} onClick={async () => {
-            try {
-              await fetch(`${API}/api/project`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:p})})
-              const d = await (await fetch(`${API}/api/project`)).json()
-              setCurrentProject(d.current || p); setAllProjects(d.projects || [])
-              setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
-            } catch(_) {}
-          }}
-            className={`text-xs px-3 py-1 rounded-full transition-colors shrink-0 ${p === currentProject ? 'bg-accent/30 text-accent/80 border border-accent/40' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>
-            {p.replace(/_/g, ' ')}
-          </button>
-        ))}
         <div className="ml-auto flex items-center gap-1 shrink-0">
           <button onClick={()=>setShowCollab(!showCollab)} className={`text-[10px] px-2 py-1 rounded transition-colors ${showCollab ? 'bg-accent/20 text-accent' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📋 Team</button>
           <button onClick={()=>setSidebarPanel('leads')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📊 CRM</button>
           <button onClick={()=>setSidebarPanel('files')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📁 Files</button>
           <button onClick={()=>setSidebarPanel('settings')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">⚙ Settings</button>
-          <button onClick={async()=>{try{const r=await fetch(`${API}/api/performance`);setPerformanceData(await r.json());setShowPerformance(true)}catch(_){}}}
-            className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-accent/80 hover:bg-gray-800">⚡ Perf</button>
-          <button onClick={async()=>{try{const r=await fetch(`${API}/api/activity`);const d=await r.json();setActivityLog(d.entries||[]);setShowActivity(true)}catch(_){}}}
-            className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-emerald-300 hover:bg-gray-800">📋 Activity</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-amber-300 hover:bg-gray-800">🧠 KB</button>
           <button onClick={()=>{fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d=>d.stats&&setAgentPerf(d.stats)).catch(()=>{});fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d=>d.entries&&setCommEvents(d.entries)).catch(()=>{});setShowConsole(true)}}
@@ -1289,8 +1207,6 @@ img{max-width:100%;height:auto}`
           })}
         </div>
       </div>
-      {activityPanel}
-      {perfPanel}
       {knowledgePanel}
 
       {/* AGENT CONSOLE */}
