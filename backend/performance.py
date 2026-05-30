@@ -84,6 +84,27 @@ def get_report():
 
     return {"report": report, "suggestions": suggestions, "agent_stats": agent_stats, "engine_stats": engine_stats}
 
+def get_agent_summary():
+    data = _load()
+    stats = {}
+    for entry in data:
+        aid = entry["agent_id"]
+        if aid not in stats:
+            stats[aid] = {"count": 0, "total_time": 0, "failures": 0}
+        stats[aid]["count"] += 1
+        stats[aid]["total_time"] += entry["duration_s"]
+        if not entry["success"]:
+            stats[aid]["failures"] += 1
+    result = {}
+    for aid, s in stats.items():
+        avg = s["total_time"] / s["count"] if s["count"] else 0
+        result[aid] = {
+            "avg": round(avg, 1),
+            "count": s["count"],
+            "fail_rate": round(s["failures"] / s["count"] * 100, 0) if s["count"] else 0
+        }
+    return result
+
 def _load():
     try:
         if os.path.exists(PERF_FILE):

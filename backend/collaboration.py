@@ -22,6 +22,7 @@ class AgentBus:
 
     def log(self, from_agent, to_agent, action, content, task_id=None):
         entry = {
+            "type": "agent_comm",
             "id": str(uuid.uuid4())[:8],
             "from": from_agent,
             "to": to_agent,
@@ -218,8 +219,23 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
                         "started_at": started_at,
                         "ts": datetime.now().isoformat(),
                     })
+                    bus.broadcast({
+                        "type": "agent_tool_step",
+                        "agent_id": agent_id,
+                        "tool": fn,
+                        "args_preview": str(list(fa.keys()))[:100] if fa else "",
+                        "status": "started",
+                        "ts": datetime.now().isoformat(),
+                    })
 
                     result = execute_tool(fn, fa)
+                    bus.broadcast({
+                        "type": "agent_tool_step",
+                        "agent_id": agent_id,
+                        "tool": fn,
+                        "status": "done",
+                        "ts": datetime.now().isoformat(),
+                    })
                     messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
                     messages.append({"role": "tool", "content": result, "tool_call_id": tid})
 

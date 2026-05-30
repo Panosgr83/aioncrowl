@@ -704,6 +704,20 @@ async def get_engine_performance():
     from engine import get_engine_perf, get_engine_status
     return {"stats": get_engine_perf(), "engines": get_engine_status()}
 
+@app.get("/api/agent-perf")
+async def get_agent_perf():
+    from performance import get_agent_summary
+    return {"stats": get_agent_summary()}
+
+@app.get("/api/comm-log")
+async def get_comm_log(limit: int = Query(50)):
+    from collaboration import bus
+    entries = []
+    for e in bus.history:
+        if e.get("type") == "agent_comm" and e.get("from") and e.get("to"):
+            entries.append(e)
+    return {"entries": entries[-limit:]}
+
 @app.get("/api/activity")
 async def get_activity(limit: int = Query(100)):
     return {"entries": read_activity(limit)}

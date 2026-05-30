@@ -5,6 +5,20 @@ import LeadsPanel from './components/LeadsPanel'
 
 const API = 'http://127.0.0.1:9790'
 
+function fmtTs(ts) {
+  try {
+    const d = new Date(ts)
+    return d.toLocaleDateString('el-GR', {day:'2-digit',month:'2-digit',year:'numeric'})
+      + ' | ' + d.toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+  } catch { return ts || '' }
+}
+
+function fmtTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+  } catch { return '' }
+}
+
 const CATEGORIES = {
   'Core': ['ceo', 'pm'],
   'Tech': ['dev', 'analytics', 'security'],
@@ -100,6 +114,10 @@ function App() {
   const [collapsedCategories, setCollapsedCategories] = useState({})
   const [expandedTools, setExpandedTools] = useState({})
   const [drawerTab, setDrawerTab] = useState('activity')
+  const [showConsole, setShowConsole] = useState(false)
+  const [commEvents, setCommEvents] = useState([])
+  const [agentPerf, setAgentPerf] = useState({})
+  const [consoleTab, setConsoleTab] = useState('activity')
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -316,6 +334,12 @@ function App() {
     fetch(`${API}/api/approvals/pending`).then(r=>r.json()).then(d => {
       if (d.approvals?.length) setPendingApprovals(d.approvals)
     }).catch(()=>{})
+    fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d => {
+      if (d.stats) setAgentPerf(d.stats)
+    }).catch(()=>{})
+    fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d => {
+      if (d.entries?.length) setCommEvents(d.entries)
+    }).catch(()=>{})
   }, [])
 
   useEffect(() => {
@@ -362,6 +386,11 @@ function App() {
           } else if (data.type === 'task_progress') {
             setTaskProgress(data)
             if (data.status === 'complete') setTimeout(() => setTaskProgress(null), 8000)
+            setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+          } else if (data.type === 'agent_comm') {
+            setCommEvents(prev => [...prev, data].slice(-200))
+            setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+          } else if (data.type === 'agent_tool_step') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
           } else if (data.type === 'file_updated') {
             if (data.agent_id) fetch(`${API}/api/agents/${data.agent_id}/files`).then(r=>r.json()).then(d => {
@@ -458,7 +487,7 @@ img{max-width:100%;height:auto}`
     const icon = currentAgent?.icon||''
     const project = currentProject === 'default' ? '' : currentProject.replace(/_/g, ' ')
     const date = new Date().toLocaleDateString('el-GR', {weekday:'long',year:'numeric',month:'long',day:'numeric'})
-    const time = new Date().toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})
+    const time = fmtTs(new Date().toISOString())
 
     const rows = displayMessages.map((m) => {
       const cfg = m.role==='user'?{label:'Χρήστης',icon:'👤',bg:'#f0f4ff',color:'#1a1a2e'}:
@@ -468,7 +497,7 @@ img{max-width:100%;height:auto}`
         m.role==='tool_result'?{label:'Αποτέλεσμα: '+(m.name||''),icon:'📎',bg:'#fafafa',color:'#444'}:null
       if (!cfg) return ''
       const content = (m.content||JSON.stringify(m.args||'')||m.result||'').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')
-      const ts = m.ts ? new Date(m.ts).toLocaleTimeString('el-GR',{hour:'2-digit',minute:'2-digit'}) : ''
+      const ts = m.ts ? fmtTime(m.ts) : ''
       return `<tr${m.role==='assistant'?' style="background:#fafbff"':''}>
         <td style="padding:10pt 16pt;background:${cfg.bg};border-bottom:1px solid #e5e7eb">
           <table style="width:100%;border-collapse:collapse"><tr>
@@ -771,7 +800,7 @@ img{max-width:100%;height:auto}`
           </div>
         )}
         {ev.duration_s&&<div className="text-[9px] text-success/80 mt-0.5">{ev.duration_s}s</div>}
-        <div className="text-[8px] text-text-dim mt-0.5">{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+        <div className="text-[8px] text-text-dim mt-0.5">{fmtTime(ev.ts)}</div>
       </div>
     )
   }
@@ -807,6 +836,8 @@ img{max-width:100%;height:auto}`
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-emerald-300 hover:bg-gray-800">📋 Activity</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-amber-300 hover:bg-gray-800">🧠 KB</button>
+          <button onClick={()=>{fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d=>d.stats&&setAgentPerf(d.stats)).catch(()=>{});fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d=>d.entries&&setCommEvents(d.entries)).catch(()=>{});setShowConsole(true)}}
+            className="text-[10px] px-2 py-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-gray-800">🎮 Console</button>
         </div>
       </div>
 
@@ -984,7 +1015,7 @@ img{max-width:100%;height:auto}`
                   )}
                   {msg.role==='error'&&<div className="whitespace-pre-wrap text-sm">{msg.content}</div>}
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
-                    <div className="msg-time">{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
+                    <div className="msg-time">{fmtTs(msg.ts)}</div>
                   )}
                   {(msg.role==='assistant')&&(
                     <div className="msg-actions">
@@ -1195,7 +1226,7 @@ img{max-width:100%;height:auto}`
                           {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
                         </div>
                         <div className={`text-[10px] mt-0.5 line-clamp-2 ${isRead ? 'text-text-dim line-through opacity-40' : 'text-text-dim'}`}>{ev.content||ev.thought||ev.message||''}</div>
-                        <div className={`text-[8px] mt-0.5 ${isRead ? 'text-text-dim/30' : 'text-text-dim'}`}>{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+                        <div className={`text-[8px] mt-0.5 ${isRead ? 'text-text-dim/30' : 'text-text-dim'}`}>{fmtTime(ev.ts)}</div>
                       </button>
                     )
                   })}
@@ -1228,7 +1259,7 @@ img{max-width:100%;height:auto}`
         )}
       </div>
       {/* BOTTOM STATUS BAR */}
-      <div className="h-6 bg-app-surface border-t border-app-elevated flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
+      <div className="h-7 bg-app-surface border-t border-app-elevated flex items-center px-3 gap-2 text-[10px] shrink-0 overflow-x-auto">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-error'}`} />
         <span className="text-gray-600 shrink-0">{wsStatus}</span>
         <div className="h-3 w-px bg-gray-800 shrink-0" />
@@ -1238,17 +1269,20 @@ img{max-width:100%;height:auto}`
             Working...
           </span>
         )}
-        <div className="flex gap-1.5 overflow-x-auto">
+        <div className="flex gap-2 overflow-x-auto">
           {agents.filter(a => {
             const t = thinkingEvents.filter(e => e.agent_id === a.id)
             return t.length > 0 && t.some(e => e.status !== 'complete' && e.status !== 'error')
-          }).slice(0, 5).map(a => {
+          }).map(a => {
             const last = thinkingEvents.filter(e => e.agent_id === a.id).pop()
+            const toolSteps = collabEvents.filter(e => e.type === 'agent_tool_step' && e.agent_id === a.id && e.status === 'started')
+            const currentTool = toolSteps.length > 0 ? toolSteps[toolSteps.length - 1]?.tool : null
             return (
               <span key={a.id} className="flex items-center gap-1 text-gray-400 shrink-0">
                 <span className="w-1 h-1 bg-amber-400 rounded-full animate-pulse"/>
                 {a.icon}
                 <span className="text-gray-500">{a.name.split(' ')[0]}</span>
+                {currentTool && <span className="text-amber-500/70 font-mono">:{currentTool}</span>}
                 {last?.remaining_seconds > 0 && <span className="text-accent">~{last.remaining_seconds}s</span>}
               </span>
             )
@@ -1258,6 +1292,97 @@ img{max-width:100%;height:auto}`
       {activityPanel}
       {perfPanel}
       {knowledgePanel}
+
+      {/* AGENT CONSOLE */}
+      {showConsole && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={()=>setShowConsole(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-[700px] max-w-[95vw] max-h-[85vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
+              <div className="flex gap-4">
+                <button onClick={()=>setConsoleTab('activity')}
+                  className={`text-xs font-medium pb-1 border-b-2 transition-colors ${consoleTab==='activity'?'text-emerald-400 border-emerald-400':'text-gray-500 border-transparent hover:text-gray-300'}`}>
+                  ⚡ Activity
+                </button>
+                <button onClick={()=>setConsoleTab('commlog')}
+                  className={`text-xs font-medium pb-1 border-b-2 transition-colors ${consoleTab==='commlog'?'text-emerald-400 border-emerald-400':'text-gray-500 border-transparent hover:text-gray-300'}`}>
+                  📋 Comm Log
+                </button>
+              </div>
+              <button onClick={()=>setShowConsole(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+            </div>
+
+            {consoleTab === 'activity' && (
+              <div className="flex-1 overflow-y-auto p-3">
+                <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
+                  {agents.map(a => {
+                    const th = thinkingEvents.filter(e => e.agent_id === a.id)
+                    const lastEvent = th[th.length - 1]
+                    const isWorking = th.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
+                    const isError = th.some(e => e.status === 'error')
+                    const isComplete = th.some(e => e.status === 'complete')
+                    const perf = agentPerf[a.id]
+                    const toolSteps = collabEvents.filter(e => e.type === 'agent_tool_step' && e.agent_id === a.id && e.status === 'started')
+                    const currentTool = toolSteps.length > 0 ? toolSteps[toolSteps.length - 1]?.tool : null
+                    return (
+                      <div key={a.id} className={`rounded-lg border p-2.5 transition-all ${isWorking ? 'border-yellow-500/40 bg-yellow-500/5' : isError ? 'border-red-500/40 bg-red-500/5' : isComplete ? 'border-green-500/30 bg-green-500/5' : 'border-gray-700/50 bg-gray-800/30'}`}>
+                        <div className="flex items-center gap-2 mb-1">
+                          {isWorking ? <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse shrink-0"/> :
+                           isError ? <span className="w-2 h-2 bg-red-500 rounded-full shrink-0"/> :
+                           isComplete ? <span className="w-2 h-2 bg-green-500 rounded-full shrink-0"/> :
+                           <span className="w-2 h-2 bg-gray-600 rounded-full shrink-0"/>}
+                          <span className="text-sm">{a.icon}</span>
+                          <span className="text-[11px] font-medium text-gray-200 truncate">{a.name}</span>
+                          {isWorking && <span className="text-[9px] text-yellow-400 ml-auto animate-pulse">LIVE</span>}
+                        </div>
+                        <div className="text-[9px] text-gray-500 space-y-0.5 ml-5">
+                          {isWorking && lastEvent && <div className="text-yellow-300/80 truncate">{lastEvent.thought?.slice(0,80)||'working...'}</div>}
+                          {isError && <div className="text-red-400">error</div>}
+                          {isComplete && lastEvent?.duration_s && <div className="text-green-400">{lastEvent.duration_s}s</div>}
+                          {currentTool && <div className="text-amber-400/70">🔧 {currentTool}</div>}
+                          {perf && (
+                            <div className="flex gap-2 mt-0.5">
+                              <span className={perf.avg < 25 ? 'text-green-500' : perf.avg < 60 ? 'text-yellow-500' : 'text-red-400'}>
+                                {perf.avg}s avg
+                              </span>
+                              {perf.fail_rate > 0 && <span className="text-red-400">{perf.fail_rate}% fails</span>}
+                            </div>
+                          )}
+                          {!isWorking && !isComplete && !isError && !perf && <span className="text-gray-600">idle</span>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {consoleTab === 'commlog' && (
+              <div className="flex-1 overflow-y-auto p-3 space-y-1">
+                {commEvents.length === 0 ? (
+                  <div className="text-center py-8 text-gray-600 text-xs">No communication yet. Send a task to CEO to see agent interactions.</div>
+                ) : (
+                  [...commEvents].reverse().slice(0, 200).map((ev, i) => {
+                    const fromAg = agents.find(x => x.id === ev.from)
+                    const toAg = agents.find(x => x.id === ev.to)
+                    const comm = typeof ev.content === 'string' ? ev.content.slice(0, 120) : ''
+                    return (
+                      <div key={ev.id || i} className="flex items-start gap-2 py-1.5 px-2 rounded hover:bg-gray-800/50 text-[10px]">
+                        <span className="text-gray-500 font-mono shrink-0 w-20 text-right">{fmtTime(ev.ts)}</span>
+                        <span className="shrink-0">{fromAg?.icon||'🤖'} {ev.from}</span>
+                        <span className="text-gray-600 shrink-0">→</span>
+                        <span className="shrink-0">{toAg?.icon||'🤖'} {ev.to}</span>
+                        <span className={`truncate ${ev.action === 'delegate' ? 'text-yellow-400' : ev.action === 'result' || ev.action === 'reply' ? 'text-green-400' : 'text-gray-400'}`}>
+                          {ev.action === 'delegate' ? '📋' : ev.action === 'result' || ev.action === 'reply' ? '✅' : '💬'} {ev.action}: {comm}
+                        </span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
