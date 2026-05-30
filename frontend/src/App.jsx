@@ -99,6 +99,7 @@ function App() {
 
   const [collapsedCategories, setCollapsedCategories] = useState({})
   const [expandedTools, setExpandedTools] = useState({})
+  const [drawerTab, setDrawerTab] = useState('activity')
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -819,42 +820,40 @@ img{max-width:100%;height:auto}`
             <div className="flex-1 overflow-hidden">{sidebarContent}</div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-2 space-y-3">
+              <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {Object.entries(CATEGORIES).map(([cat, agentIds]) => {
                   const catAgents = agents.filter(a => agentIds.includes(a.id))
                   if (catAgents.length === 0) return null
                   const hasActive = catAgents.some(a => a.id === activeAgent)
                   const expanded = !collapsedCategories[cat]
                   return (
-                    <div key={cat} className="space-y-0.5">
+                    <div key={cat}>
                       <button onClick={() => setCollapsedCategories(prev => ({...prev, [cat]: !prev[cat]}))}
-                        className={`w-full flex items-center gap-1 px-2 text-[9px] uppercase tracking-wider font-medium transition-colors ${hasActive ? 'text-accent' : 'text-text-dim hover:text-text-secondary'}`}>
-                        <span className="text-[8px]">{expanded ? '▾' : '▸'}</span>{cat}
+                        className={`w-full flex items-center gap-1 px-2 py-1 text-[9px] uppercase tracking-wider font-medium transition-all rounded-sm ${hasActive ? 'text-accent border-l-[3px] border-accent bg-accent/[0.04]' : 'text-text-dim border-l-[3px] border-transparent hover:text-text-secondary'}`}>
+                        <span className="text-[7px] opacity-60">{expanded ? '▾' : '▸'}</span>
+                        <span>{cat}</span>
+                        <span className="text-[8px] opacity-40 ml-auto">{catAgents.length}</span>
                       </button>
-                      {expanded && catAgents.map(a => {
-                        const isActive = activeAgent === a.id
-                        const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
-                        return (
-                          <button key={a.id} onClick={()=>switchAgent(a.id)}
-                            className={`w-full text-left px-3 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'border-l-2 border-accent bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'} ${isThinking ? 'animate-pulse' : ''}`}>
-                            {isThinking && <span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse shrink-0"/>}
-                            <span className="shrink-0">{a.icon}</span>
-                            <span className="truncate">{a.name}</span>
-                            {isActive && <span className="w-1 h-1 bg-accent rounded-full ml-auto shrink-0"/>}
-                          </button>
-                        )
-                      })}
+                      {expanded && (
+                        <div className="ml-1 mt-0.5 space-y-0.5 border-l border-app-elevated/60 pl-1">
+                          {catAgents.map(a => {
+                            const isActive = activeAgent === a.id
+                            const status = activeAgents[a.id]
+                            const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
+                            const dotClass = isThinking ? 'bg-accent animate-pulse' : status === 'writing' ? 'bg-success animate-pulse' : status && status !== 'idle' ? 'bg-warning' : 'bg-text-dim/40'
+                            return (
+                              <button key={a.id} onClick={()=>switchAgent(a.id)}
+                                className={`w-full text-left px-2.5 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'bg-accent/10 text-text-primary shadow-sm shadow-accent/5' : 'text-text-secondary hover:bg-app-elevated'} ${isThinking ? 'animate-pulse' : ''}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} title={status||'idle'} />
+                                <span className="shrink-0">{a.icon}</span>
+                                <span className="truncate">{a.name}</span>
+                                {isActive && <span className="w-1 h-1 bg-accent rounded-full ml-auto shrink-0"/>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )
-                })}
-                {agents.filter(a => !Object.values(CATEGORIES).flat().includes(a.id)).map(a => {
-                  const isActive = activeAgent === a.id
-                  return (
-                    <button key={a.id} onClick={()=>switchAgent(a.id)}
-                      className={`w-full text-left px-3 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'border-l-2 border-accent bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'}`}>
-                      <span className="shrink-0">{a.icon}</span>
-                      <span className="truncate">{a.name}</span>
-                    </button>
                   )
                 })}
               </div>
@@ -881,24 +880,7 @@ img{max-width:100%;height:auto}`
                   )
                 })}
               </div>
-              <div className="border-t border-app-elevated p-2.5">
-                <div className="text-[9px] text-text-dim mb-1.5 uppercase tracking-wider">Agent Status</div>
-                <div className="flex flex-wrap gap-1">
-                  {agents.map(a => {
-                    const status = activeAgents[a.id]
-                    const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
-                    const dotClass = isThinking?'bg-accent animate-pulse':status==='writing'?'bg-success animate-pulse':status&&status!=='idle'?'bg-warning':'bg-text-dim'
-                    return (
-                      <span key={a.id} className="relative group" title={`${a.name}: ${isThinking?'working...':status||'idle'}`}>
-                        <span className={`inline-block text-[10px] px-1 py-0.5 rounded ${isThinking?'bg-accent/10':status==='writing'?'bg-success/10':'bg-app-elevated'}`}>
-                          <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotClass} mr-0.5 align-middle`}/>
-                          <span className="align-middle">{a.icon}</span>
-                        </span>
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
+
             </div>
           )}
         </div>
@@ -940,36 +922,60 @@ img{max-width:100%;height:auto}`
             )}
 
             {displayMessages.map((msg,i)=>msg?(
-              <div key={i} className={`flex ${msg.role==='user'?'justify-end':msg.role==='system'?'justify-center':'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/20':msg.role==='system'?msg._sysType==='thinking'?'bg-accent/5 text-accent/70 text-[10px] rounded-full px-4 py-1 border border-accent/10':msg._sysType==='warning'?'bg-warning/10 text-warning text-[10px] rounded-full px-3 py-1 border border-warning/30':'bg-transparent text-text-dim text-[10px]':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-app-surface text-text-secondary text-xs font-mono border border-app-elevated':'bg-app-surface text-text-primary border-l-2 border-accent'}`}>
-                  {msg.role==='system'&&<div className={`whitespace-pre-wrap ${msg._sysType==='thinking'?'text-accent/70':msg._sysType==='warning'?'text-warning':'text-text-dim italic'}`}>{msg.content}</div>}
-                  {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-warning rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-text-dim rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-warning text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
-                  {msg.role==='tool_result'&&<><div className="text-text-dim mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
+              <div key={i} className={`msg-row ${msg.role}`}>
+                {msg.role==='assistant'&&<div className="msg-avatar">{currentAgent?.icon||'🤖'}</div>}
+                <div className={`msg-bubble ${msg.role}${msg.role==='system'&&msg._sysType?` ${msg._sysType}`:''}`}>
+                  {msg.role==='system'&&(
+                    <div className="flex items-start gap-1.5">
+                      {msg._sysType==='thinking'&&<span className="text-accent/70 text-[10px] shrink-0 mt-[1px]">⏳</span>}
+                      {msg._sysType==='warning'&&<span className="text-warning text-[10px] shrink-0 mt-[1px]">⚠️</span>}
+                      {msg._sysType==='info'&&<span className="text-text-dim/50 text-[10px] shrink-0 mt-[1px]">ℹ️</span>}
+                      {!msg._sysType&&<span className="text-text-dim/50 text-[10px] shrink-0 mt-[1px]">·</span>}
+                      <span className={msg._sysType==='thinking'?'text-accent/80':msg._sysType==='warning'?'text-warning':'text-text-dim italic'}>
+                        {msg.content.replace(/^📝 /,'').replace(/^📎 /,'')}
+                      </span>
+                    </div>
+                  )}
+                  {msg.role==='tool_use'&&<>
+                    <div className="font-medium mb-1 flex items-center gap-2">
+                      {currentTool===msg.name ? <span className="w-2 h-2 bg-warning rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-text-dim rounded-full" />}
+                      🔧 {msg.name}
+                      {currentTool===msg.name && <span className="text-warning text-[10px] animate-pulse ml-auto">executing...</span>}
+                    </div>
+                    <pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre>
+                  </>}
+                  {msg.role==='tool_result'&&<>
+                    <div className="text-text-dim mb-1">← {msg.name}</div>
+                    <div className="whitespace-pre-wrap">{msg.result}</div>
+                  </>}
                   {(msg.role==='assistant'||msg.role==='user')&&(
                     msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
                       ? <div className="render-html" dangerouslySetInnerHTML={{__html: msg.content}} />
-                      : <div className="whitespace-pre-wrap">{msg.content}</div>
+                      : <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
                   )}
                   {msg._grouped && msg.tools?.length > 0 && (
-                    <div className="mt-3 pt-2 border-t border-app-elevated">
-                      <button onClick={() => setExpandedTools(prev => ({...prev, [i]: !prev[i]}))}
-                        className="flex items-center gap-1.5 text-[10px] text-text-dim hover:text-text-secondary transition-colors w-full text-left">
-                        <span className="text-[8px]">{expandedTools[i] ? '▾' : '▸'}</span>
-                        {msg.tools.length === 1
-                          ? <><span className="text-warning">{msg.tools[0].name}</span> · <span className="font-mono text-[9px]">{msg.tools[0].duration}s</span></>
-                          : <>{msg.tools.length} tools · <span className="font-mono text-[9px]">{msg._totalDuration}s</span></>}
-                      </button>
+                    <div>
+                      <div className="tool-bar" onClick={() => setExpandedTools(prev => ({...prev, [i]: !prev[i]}))}>
+                        <span className="tool-bar-icon">🔧</span>
+                        {msg.tools.length === 1 ? (
+                          <><span className="tool-bar-name">{msg.tools[0].name}</span></>
+                        ) : (
+                          <><span className="tool-bar-count">{msg.tools.length}</span><span>tools</span></>
+                        )}
+                        <span className="tool-bar-duration">{msg._totalDuration || msg.tools[0]?.duration}s</span>
+                        <span className={`tool-bar-arrow ${expandedTools[i] ? 'open' : ''}`}>▸</span>
+                      </div>
                       {expandedTools[i] && (
-                        <div className="mt-2 space-y-1.5">
+                        <div className="mt-1.5 space-y-1.5">
                           {msg.tools.map((t,j) => (
-                            <div key={j} className="bg-app-elevated rounded-lg px-3 py-2 text-xs">
-                              <div className="flex items-center gap-2 text-text-secondary mb-0.5">
+                            <div key={j} className="tool-item">
+                              <div className="tool-item-header">
                                 <span>🔧</span>
-                                <span className="text-warning font-medium">{t.name}</span>
-                                {t.duration && <span className="font-mono text-[9px] text-text-dim ml-auto">{t.duration}s</span>}
+                                <span className="tool-item-name">{t.name}</span>
+                                {t.duration && <span className="tool-item-duration">{t.duration}s</span>}
                               </div>
-                              {t.args && <div className="text-text-dim text-[9px] font-mono truncate">{JSON.stringify(t.args).slice(0,120)}</div>}
-                              {t.result && <div className="text-text-dim text-[9px] mt-0.5 line-clamp-2 font-mono">{t.result.slice(0,200)}</div>}
+                              {t.args && <div className="tool-item-args">{JSON.stringify(t.args).slice(0,120)}</div>}
+                              {t.result && <div className="tool-item-result">{t.result.slice(0,200)}</div>}
                             </div>
                           ))}
                         </div>
@@ -978,12 +984,13 @@ img{max-width:100%;height:auto}`
                   )}
                   {msg.role==='error'&&<div className="whitespace-pre-wrap text-sm">{msg.content}</div>}
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
-                    <div className={`text-[10px] mt-1 ${msg.role==='user'?'text-indigo-300/60':'text-text-dim'}`}>{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
+                    <div className="msg-time">{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
                   )}
-                  {msg.role==='assistant'&&(
-                    <div className="flex justify-end mt-1.5">
-                      <button onClick={()=>copyMessage(msg, i)}
-                        className="text-[10px] text-text-dim hover:text-accent transition-colors flex items-center gap-0.5 bg-app-elevated/50 hover:bg-app-elevated rounded-md px-1.5 py-0.5" title="Copy">{copiedIndex===i?'✓':'📋'}</button>
+                  {(msg.role==='assistant')&&(
+                    <div className="msg-actions">
+                      <button onClick={()=>copyMessage(msg, i)} className="msg-action-btn" title="Copy">
+                        {copiedIndex===i?'✓':'📋'}
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1008,8 +1015,12 @@ img{max-width:100%;height:auto}`
 
             {typing&&(
               <div className="flex justify-start">
-                <div className="bg-gray-800 rounded-2xl px-4 py-3 flex gap-1.5">
-                  {[0,150,300].map(d=><span key={d} className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{animationDelay:`${d}ms`}}/>)}
+                <div className="bg-app-surface border border-app-elevated rounded-2xl shadow-sm">
+                  <div className="typing-wave">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </div>
                 </div>
               </div>
             )}
@@ -1064,16 +1075,16 @@ img{max-width:100%;height:auto}`
             </div>
           )}
 
-          <div className="border-t border-app-elevated p-4 bg-app-surface/50">
-            <div className="flex gap-2 max-w-4xl mx-auto">
-              <div className="flex-1 flex gap-2 items-center bg-app-elevated border border-app-elevated rounded-full px-5 focus-within:border-accent focus-within:shadow-[0_0_0_2px_var(--accent-glow)] transition-all">
+          <div className="border-t border-app-elevated/60 px-4 py-3 bg-app-surface/30">
+            <div className="flex gap-2 max-w-4xl mx-auto items-center">
+              <div className="flex-1 flex gap-2 items-center bg-app-elevated/80 border border-app-elevated rounded-full px-4 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px_var(--accent-glow)] transition-all">
                 <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown}
                   placeholder={connected?`Μήνυμα στον ${currentAgent?.name}...`:'Connecting...'}
                   disabled={!connected}
-                  className="flex-1 py-3 bg-transparent text-text-primary placeholder-text-dim focus:outline-none disabled:opacity-40"
+                  className="flex-1 py-2.5 bg-transparent text-sm text-text-primary placeholder-text-dim/50 focus:outline-none disabled:opacity-40"
                 />
                 <button onClick={() => fileInputRef.current?.click()}
-                  className="text-text-dim hover:text-accent transition-colors" title="Upload file">📎</button>
+                  className="text-text-dim/60 hover:text-accent transition-colors text-sm" title="Upload file">📎</button>
                 <input ref={fileInputRef} type="file" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0]; if (!file) return
                   const form = new FormData(); form.append('file', file)
@@ -1091,21 +1102,20 @@ img{max-width:100%;height:auto}`
                 }} />
               </div>
               {typing && (
-                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm self-center" title="Δεν σταματάει agents που δουλεύουν στο background"><span>■</span> Stop</button>
+                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 py-2 font-medium transition-all flex items-center gap-1.5 text-sm self-center border border-error/20"><span>■</span> Stop</button>
               )}
               <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
-                className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-6 font-medium transition-all disabled:text-text-dim shrink-0">Send</button>
+                className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-5 py-2.5 font-medium transition-all disabled:text-text-dim shrink-0 text-sm">Send →</button>
             </div>
           </div>
         </div>
 
-        {/* RIGHT SIDEBAR - Team Activity */}
-        {/* CONTEXT DRAWER — overlay from right */}
+        {/* CONTEXT DRAWER — overlay from right with tabs */}
         {showCollab && (
           <>
             <div className="fixed inset-0 z-40" onClick={()=>setShowCollab(false)} />
             <div className="fixed right-0 top-0 bottom-0 w-80 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
-              <div className="px-4 py-3 border-b border-app-elevated text-xs flex items-center justify-between shrink-0">
+              <div className="px-4 py-3 border-b border-app-elevated flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="text-text-secondary uppercase font-medium tracking-wider text-[10px]">Context</span>
                   {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
@@ -1135,46 +1145,84 @@ img{max-width:100%;height:auto}`
                 </form>
               )}
 
-              <div className="border-b border-app-elevated">
-                <div className="px-4 py-2 text-[9px] text-text-dim uppercase tracking-wider font-medium">Live Activity</div>
-                <div className="px-2 pb-2 space-y-1 max-h-[250px] overflow-y-auto">
+              {/* Tabs */}
+              <div className="flex border-b border-app-elevated px-3 pt-1 gap-0">
+                <button onClick={()=>setDrawerTab('activity')} className={`drawer-tab ${drawerTab==='activity'?'active':''}`}>
+                  ⚡ Activity
+                </button>
+                <button onClick={()=>setDrawerTab('log')} className={`drawer-tab ${drawerTab==='log'?'active':''}`}>
+                  📋 Log
+                </button>
+                <button onClick={()=>setDrawerTab('projects')} className={`drawer-tab ${drawerTab==='projects'?'active':''}`}>
+                  📁 Projects
+                </button>
+              </div>
+
+              {/* Tab: Activity */}
+              {drawerTab === 'activity' && (
+                <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
                   {recentThinking.length === 0 ? (
-                    <div className="text-center py-4 text-text-dim text-[10px]">Waiting for agent activity...</div>
+                    <div className="text-center py-8 text-text-dim text-[10px]">Waiting for agent activity...</div>
                   ) : (
                     recentThinking.map((ev, i) => agentThinks({...ev, id: ev.id||i, _ts: ev._ts||i}))
                   )}
                 </div>
-              </div>
+              )}
 
-              <div ref={collabRef} className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
-                {collabEvents.length === 0 && (
-                  <div className="text-center py-8 text-text-dim text-[10px]">No activity yet.</div>
-                )}
-                {[...collabEvents].reverse().map((ev, ri) => {
-                  if (ev.type === 'agent_thinking') return null
-                  const isRead = readEvents.includes(ev.id)
-                  const fromAgent = agents.find(a => a.id === ev.from)
-                  const toAgent = agents.find(a => a.id === ev.to)
-                  return (
-                    <button key={ev.id||ri} onClick={()=>{
-                      if (ev.id) fetch(`${API}/api/collab/events/${ev.id}/read`, {method:'POST'}).catch(()=>{})
-                      setReadEvents(prev => prev.includes(ev.id) ? prev : [...prev, ev.id])
-                      if (ev.to) navigateToAgent(ev.to === 'ceo' ? ev.from : ev.to, 'default')
+              {/* Tab: Log */}
+              {drawerTab === 'log' && (
+                <div ref={collabRef} className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+                  {collabEvents.length === 0 && (
+                    <div className="text-center py-8 text-text-dim text-[10px]">No activity yet.</div>
+                  )}
+                  {[...collabEvents].reverse().map((ev, ri) => {
+                    if (ev.type === 'agent_thinking') return null
+                    const isRead = readEvents.includes(ev.id)
+                    const fromAgent = agents.find(a => a.id === ev.from)
+                    const toAgent = agents.find(a => a.id === ev.to)
+                    return (
+                      <button key={ev.id||ri} onClick={()=>{
+                        if (ev.id) fetch(`${API}/api/collab/events/${ev.id}/read`, {method:'POST'}).catch(()=>{})
+                        setReadEvents(prev => prev.includes(ev.id) ? prev : [...prev, ev.id])
+                        if (ev.to) navigateToAgent(ev.to === 'ceo' ? ev.from : ev.to, 'default')
+                      }}
+                        className={`w-full text-left rounded-lg p-2 border transition-colors ${isRead ? 'bg-transparent border-transparent' : 'bg-app-elevated/60 border-app-elevated hover:bg-app-elevated'}`}>
+                        <div className={`flex items-center gap-1.5 mb-0.5 ${isRead ? 'opacity-40' : ''}`}>
+                          <span className="text-sm">{fromAgent?.icon||'🤖'}</span>
+                          <span className={`text-[10px] font-medium ${isRead ? 'text-text-dim line-through' : 'text-text-secondary'}`}>{fromAgent?.name||ev.from}{ev.to?` → ${toAgent?.name||ev.to}`:''}</span>
+                        </div>
+                        <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-text-dim' : ev.action === 'delegate' ? 'text-warning' : ev.action === 'result' ? 'text-success/70' : ev.type === 'task_progress' ? 'text-accent/80' : 'text-text-secondary'}`}>
+                          {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
+                        </div>
+                        <div className={`text-[10px] mt-0.5 line-clamp-2 ${isRead ? 'text-text-dim line-through opacity-40' : 'text-text-dim'}`}>{ev.content||ev.thought||ev.message||''}</div>
+                        <div className={`text-[8px] mt-0.5 ${isRead ? 'text-text-dim/30' : 'text-text-dim'}`}>{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Tab: Projects */}
+              {drawerTab === 'projects' && (
+                <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+                  <div className="text-[10px] text-text-dim">Current project: <span className="text-text-primary font-medium">{currentProject}</span></div>
+                  {allProjects.filter(p => p !== 'default').map(p => (
+                    <button key={p} onClick={async () => {
+                      try {
+                        await fetch(`${API}/api/project`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:p})})
+                        const d = await (await fetch(`${API}/api/project`)).json()
+                        setCurrentProject(d.current || p); setAllProjects(d.projects || [])
+                        setMessages([]); switchToSession(activeAgent, activeSession?.sessionId || 'default')
+                      } catch(_) {}
                     }}
-                      className={`w-full text-left rounded-lg p-2 border transition-colors ${isRead ? 'bg-transparent border-transparent' : 'bg-app-elevated/60 border-app-elevated hover:bg-app-elevated'}`}>
-                      <div className={`flex items-center gap-1.5 mb-0.5 ${isRead ? 'opacity-40' : ''}`}>
-                        <span className="text-sm">{fromAgent?.icon||'🤖'}</span>
-                        <span className={`text-[10px] font-medium ${isRead ? 'text-text-dim line-through' : 'text-text-secondary'}`}>{fromAgent?.name||ev.from}{ev.to?` → ${toAgent?.name||ev.to}`:''}</span>
-                      </div>
-                      <div className={`text-[10px] ${isRead ? 'opacity-30 line-through text-text-dim' : ev.action === 'delegate' ? 'text-warning' : ev.action === 'result' ? 'text-success/70' : ev.type === 'task_progress' ? 'text-accent/80' : 'text-text-secondary'}`}>
-                        {ev.action === 'delegate' ? '📋 Ανάθεση' : ev.action === 'result' ? '✅ Αποτέλεσμα' : ev.type === 'task_progress' ? (ev.status==='complete'?'✅ Ολοκληρώθηκε':`🔧 ${ev.progress}%`): ev.action||ev.type}
-                      </div>
-                      <div className={`text-[10px] mt-0.5 line-clamp-2 ${isRead ? 'text-text-dim line-through opacity-40' : 'text-text-dim'}`}>{ev.content||ev.thought||ev.message||''}</div>
-                      <div className={`text-[8px] mt-0.5 ${isRead ? 'text-text-dim/30' : 'text-text-dim'}`}>{new Date(ev.ts).toLocaleTimeString('el-GR')}</div>
+                      className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${p === currentProject ? 'bg-accent/10 text-accent border border-accent/20' : 'text-text-secondary hover:bg-app-elevated border border-transparent'}`}>
+                      <div className="font-medium">{p.replace(/_/g, ' ')}</div>
+                      <div className="text-[9px] text-text-dim mt-0.5">Click to switch</div>
                     </button>
-                  )
-                })}
-              </div>
+                  ))}
+                  {allProjects.length <= 1 && <div className="text-center py-4 text-text-dim text-[10px]">No projects yet. Click ✦ to create one.</div>}
+                </div>
+              )}
             </div>
           </>
         )}

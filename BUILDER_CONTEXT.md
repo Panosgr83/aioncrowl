@@ -45,6 +45,18 @@
 ### ΚΑΝΟΝΑΣ #5 — Αρχιτεκτονικές Αποφάσεις
 Μην αναιρείς χωρίς ρητή εντολή — βλ. πίνακα "Αρχιτεκτονικές Αποφάσεις" παρακάτω.
 
+### Γλώσσα
+- Απαντάς **πάντα στα Ελληνικά** (με αγγλικούς τεχνικούς όρους όπου χρειάζεται)
+- Το reasoning σου είναι επίσης στα Ελληνικά
+
+### Λειτουργία: Explain-First
+Όταν ο χρήστης ζητά την υλοποίηση νέου feature:
+1. Εξήγησε πρώτα **τι είναι** (περιγραφή)
+2. Εξήγησε **πώς θα λειτουργεί** (UX/συμπεριφορά)
+3. Περίμενε επιβεβαίωση πριν γράψεις κώδικα
+
+Αυτή η λειτουργία ισχύει για ΟΛΑ τα features, UI steps, refactors, και νέους agents.
+
 ### Workflow ανά Session
 
 ```
@@ -178,13 +190,13 @@ e0cbbbb Phase 1: security sandbox, session cache, context trimming
 | Step | Status |
 |------|--------|
 | 1. index.css CSS variables | ✅ |
-| 2. Message bubbles | pending |
-| 3. Agent sidebar grouping | pending |
-| 4. groupToolCalls + collapsible bar | pending |
-| 5. System messages 3‑tier | pending |
-| 6. Input bar | pending |
-| 7. Typing/progress indicators | pending |
-| 8. Context drawer | pending |
+| 2. Message bubbles | ✅ |
+| 3. Agent sidebar grouping | ✅ |
+| 4. groupToolCalls + collapsible bar | ✅ |
+| 5. System messages 3‑tier | ✅ |
+| 6. Input bar pill design | ✅ |
+| 7. Typing/progress indicators | ✅ |
+| 8. Context drawer tabs | ✅ |
 
 ## Known Issues
 - `imggen` naming confusion (σχεδίαση vs εικόνα) – postponed (6+ αρχεία)
