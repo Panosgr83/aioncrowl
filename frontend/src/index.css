@@ -36,6 +36,69 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Agent Bar Dot + Pulse Glow ── */
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.agent-dot.idle {
+  background: var(--color-text-dim);
+  opacity: 0.3;
+}
+.agent-dot.active {
+  background: #fbbf24;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+.agent-dot.done {
+  background: var(--color-success);
+}
+.agent-dot.error {
+  background: var(--color-error);
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(251, 191, 36, 0); }
+}
+
+.agent-dot:hover {
+  transform: scale(1.4);
+  opacity: 1;
+}
+
+/* ── Console Button Pulse ── */
+.console-btn-live {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* ── Sidebar Agent Row Active ── */
+.sidebar-agent-row {
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-left: 2px solid transparent;
+}
+.sidebar-agent-row.active {
+  background: rgba(251, 191, 36, 0.06);
+  border-left-color: #fbbf24;
+  color: var(--color-text-primary);
+}
+.sidebar-agent-row.idle {
+  color: var(--color-text-secondary);
+}
+.sidebar-agent-row.idle:hover {
+  background: var(--color-app-elevated);
+}
+
 .render-html {
   word-break: break-word;
   color: var(--color-text-primary);

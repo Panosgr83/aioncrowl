@@ -181,6 +181,7 @@ function App() {
     m._aid === activeAgent && m._sid === (activeSession?.sessionId || 'default')
   )), [messages, activeAgent, activeSession])
   const recentThinking = useMemo(() => thinkingEvents.slice(-5).reverse(), [thinkingEvents])
+  const hasActiveAgents = thinkingEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
 
   const stopGeneration = useCallback(() => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
@@ -747,6 +748,16 @@ img{max-width:100%;height:auto}`
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success animate-pulse':'bg-red-500'}`} />
         <span className="text-[10px] text-gray-600 shrink-0">{currentProject !== 'default' ? currentProject.replace(/_/g, ' ') : ''}</span>
         <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
+        {agents.map(a => {
+          const isWorking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
+          const isError = thinkingEvents.some(e => e.agent_id === a.id && e.status === 'error')
+          const isComplete = thinkingEvents.some(e => e.agent_id === a.id && e.status === 'complete' && (Date.now() - new Date(e.ts).getTime()) < 15000)
+          const sc = isWorking ? 'active' : isError ? 'error' : isComplete ? 'done' : 'idle'
+          const lastEvent = [...thinkingEvents].reverse().find(e => e.agent_id === a.id)
+          const tip = sc === 'active' ? (lastEvent?.thought?.slice(0,80)||'working') : sc === 'error' ? 'error' : sc === 'done' ? 'completed' : 'idle'
+          return <span key={a.id} className={`agent-dot ${sc}`} title={`${a.icon} ${a.name}: ${tip}`} />
+        })}
+        <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
         <div className="ml-auto flex items-center gap-1 shrink-0">
           <button onClick={()=>setShowCollab(!showCollab)} className={`text-[10px] px-2 py-1 rounded transition-colors ${showCollab ? 'bg-accent/20 text-accent' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📋 Team</button>
           <button onClick={()=>setSidebarPanel('leads')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📊 CRM</button>
@@ -755,7 +766,7 @@ img{max-width:100%;height:auto}`
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-amber-300 hover:bg-gray-800">🧠 KB</button>
           <button onClick={()=>{fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d=>d.stats&&setAgentPerf(d.stats)).catch(()=>{});fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d=>d.entries&&setCommEvents(d.entries)).catch(()=>{});setShowConsole(true)}}
-            className="text-[10px] px-2 py-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-gray-800">🎮 Console</button>
+            className={`text-[10px] px-2 py-1 rounded transition-colors ${hasActiveAgents ? 'console-btn-live text-yellow-300 bg-yellow-500/10' : 'text-emerald-400 hover:text-emerald-300 hover:bg-gray-800'}`}>🎮 Console</button>
         </div>
       </div>
 
@@ -789,14 +800,19 @@ img{max-width:100%;height:auto}`
                             const isActive = activeAgent === a.id
                             const status = activeAgents[a.id]
                             const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
-                            const dotClass = isThinking ? 'bg-accent animate-pulse' : status === 'writing' ? 'bg-success animate-pulse' : status && status !== 'idle' ? 'bg-warning' : 'bg-text-dim/40'
+                            const isError = thinkingEvents.some(e => e.agent_id === a.id && e.status === 'error')
+                            const dotClass = isThinking ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.5)]' : isError ? 'bg-red-500' : status === 'writing' ? 'bg-success' : status && status !== 'idle' ? 'bg-warning' : 'bg-text-dim/40'
+                            const lastEvent = [...thinkingEvents].reverse().find(e => e.agent_id === a.id)
+                            const taskHint = isThinking && lastEvent?.thought ? lastEvent.thought.slice(0,40) : ''
+                            const rowClass = isActive ? 'sidebar-agent-row active' : 'sidebar-agent-row idle'
                             return (
                               <button key={a.id} onClick={()=>switchAgent(a.id)}
-                                className={`w-full text-left px-2.5 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'bg-accent/10 text-text-primary shadow-sm shadow-accent/5' : 'text-text-secondary hover:bg-app-elevated'} ${isThinking ? 'animate-pulse' : ''}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} title={status||'idle'} />
+                                className={rowClass}>
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} title={status||'idle'} />
                                 <span className="shrink-0">{a.icon}</span>
-                                <span className="truncate">{a.name}</span>
-                                {isActive && <span className="w-1 h-1 bg-accent rounded-full ml-auto shrink-0"/>}
+                                <span className="truncate text-[11px]">{a.name}</span>
+                                {isActive && <span className="w-1 h-1 bg-amber-400 rounded-full ml-auto shrink-0"/>}
+                                {isThinking && taskHint && <span className="text-[8px] text-amber-400/70 truncate ml-1 max-w-[60px]">{taskHint}</span>}
                               </button>
                             )
                           })}
