@@ -885,15 +885,15 @@ function App() {
 
             {showInfoInput&&(
               <div className="flex justify-center">
-                <div className="w-full max-w-lg bg-gray-800/80 border border-amber-700/50 rounded-xl p-4 space-y-3">
-                  <div className="text-xs text-amber-400 font-medium">📝 Συμπλήρωσε επιπλέον πληροφορίες:</div>
+                <div className="w-full max-w-lg bg-app-surface border border-accent/30 rounded-xl p-4 space-y-3">
+                  <div className="text-xs text-accent font-medium">📝 Συμπλήρωσε επιπλέον πληροφορίες:</div>
                   <textarea ref={infoInputRef} value={infoInput} onChange={e=>setInfoInput(e.target.value)} onKeyDown={handleInfoKeyDown} rows={3}
                     placeholder="Γράψε επιπλέον στοιχεία..."
-                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500 resize-none"
+                    className="w-full bg-app-elevated border border-app-elevated rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-dim focus:outline-none focus:border-accent resize-none"
                   />
                   <div className="flex gap-2 justify-end">
-                    <button onClick={()=>{setShowInfoInput(false);setInfoInput('')}} className="text-xs text-gray-500 hover:text-gray-300 px-3 py-1.5">Cancel</button>
-                    <button onClick={submitInfo} disabled={!infoInput.trim()} className="text-xs bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white px-4 py-1.5 rounded-lg transition-colors">Continue</button>
+                    <button onClick={()=>{setShowInfoInput(false);setInfoInput('')}} className="text-xs text-text-dim hover:text-text-secondary px-3 py-1.5">Cancel</button>
+                    <button onClick={submitInfo} disabled={!infoInput.trim()} className="text-xs bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white px-4 py-1.5 rounded-full transition-all">Continue</button>
                   </div>
                 </div>
               </div>
@@ -941,30 +941,30 @@ function App() {
           </div>
 
           {pendingApprovals.length > 0 && (
-            <div className="border-t border-amber-800/50 bg-amber-900/20 p-3">
+            <div className="border-t border-warning/30 bg-warning/5 p-3">
               {pendingApprovals.map(req => (
                 <div key={req.id || req.request_id} className="flex items-center gap-3 max-w-4xl mx-auto text-sm">
-                  <span className="text-amber-400 font-medium shrink-0">⏳ Αίτημα Έγκρισης</span>
-                  <span className="text-gray-300 truncate flex-1">{req.summary || req.details?.slice(0,100)}</span>
+                  <span className="text-warning font-medium shrink-0">⏳ Αίτημα Έγκρισης</span>
+                  <span className="text-text-secondary truncate flex-1">{req.summary || req.details?.slice(0,100)}</span>
                   <button onClick={() => approveRequest(req, 'approve')}
-                    className="bg-green-600 hover:bg-green-500 text-white rounded-lg px-3 py-1 text-xs font-medium transition-colors shrink-0">✓ Έγκριση</button>
+                    className="bg-success hover:bg-success/80 text-white rounded-full px-3 py-1 text-xs font-medium transition-colors shrink-0">✓ Έγκριση</button>
                   <button onClick={() => approveRequest(req, 'reject')}
-                    className="bg-red-600/50 hover:bg-red-500 text-white rounded-lg px-3 py-1 text-xs font-medium transition-colors shrink-0">✗ Απόρριψη</button>
+                    className="bg-error/30 hover:bg-error/50 text-white rounded-full px-3 py-1 text-xs font-medium transition-colors shrink-0">✗ Απόρριψη</button>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="border-t border-gray-800 p-4 bg-gray-900/50">
+          <div className="border-t border-app-elevated p-4 bg-app-surface/50">
             <div className="flex gap-2 max-w-4xl mx-auto">
-              <div className="flex-1 flex gap-2 items-center bg-gray-800 border border-gray-700 rounded-xl px-4 focus-within:border-violet-500">
+              <div className="flex-1 flex gap-2 items-center bg-app-elevated border border-app-elevated rounded-full px-5 focus-within:border-accent focus-within:shadow-[0_0_0_2px_var(--accent-glow)] transition-all">
                 <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown}
                   placeholder={connected?`Μήνυμα στον ${currentAgent?.name}...`:'Connecting...'}
                   disabled={!connected||typing}
-                  className="flex-1 py-3 bg-transparent text-gray-100 placeholder-gray-500 focus:outline-none disabled:opacity-50"
+                  className="flex-1 py-3 bg-transparent text-text-primary placeholder-text-dim focus:outline-none disabled:opacity-40"
                 />
                 <button onClick={() => fileInputRef.current?.click()} disabled={typing}
-                  className="text-gray-500 hover:text-violet-400 transition-colors disabled:opacity-50" title="Upload file">📎</button>
+                  className="text-text-dim hover:text-accent transition-colors disabled:opacity-40" title="Upload file">📎</button>
                 <input ref={fileInputRef} type="file" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0]; if (!file) return
                   const form = new FormData(); form.append('file', file)
@@ -983,12 +983,12 @@ function App() {
               </div>
               {typing ? (
                 <>
-                  <button onClick={addInfo} className="bg-amber-600 hover:bg-amber-500 text-white rounded-xl px-4 font-medium transition-colors flex items-center gap-1.5 text-sm"><span>✏️</span> Info</button>
-                  <button onClick={stopGeneration} className="bg-red-600 hover:bg-red-500 text-white rounded-xl px-4 font-medium transition-colors flex items-center gap-1.5 text-sm"><span>■</span> Stop</button>
+                  <button onClick={addInfo} className="bg-accent/10 hover:bg-accent/20 text-accent rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm"><span>✏️</span> Info</button>
+                  <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 font-medium transition-all flex items-center gap-1.5 text-sm"><span>■</span> Stop</button>
                 </>
               ) : (
                 <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
-                  className="bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 text-white rounded-xl px-6 font-medium transition-colors disabled:text-gray-500">Send</button>
+                  className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-6 font-medium transition-all disabled:text-text-dim">Send</button>
               )}
             </div>
           </div>
