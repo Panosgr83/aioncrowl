@@ -631,9 +631,9 @@ function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-950 text-gray-100 font-sans overflow-hidden">
+    <div className="h-screen flex flex-col bg-app-base text-text-primary font-sans overflow-hidden">
       {/* TOP PROJECT BAR */}
-      <div className="flex items-center gap-1 px-4 py-1.5 bg-gray-900 border-b border-gray-800 shrink-0 overflow-x-auto z-10">
+      <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
         <span className="text-violet-400 font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-green-500 animate-pulse':'bg-red-500'}`} />
         <div className="h-4 w-px bg-gray-700 mx-2 shrink-0" />
@@ -767,18 +767,18 @@ function App() {
 
             {displayMessages.map((msg,i)=>(
               <div key={i} className={`flex ${msg.role==='user'?'justify-end':msg.role==='system'?'justify-center':'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-violet-600 text-white':msg.role==='system'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-gray-800 text-gray-400 text-xs font-mono border border-gray-700':'bg-gray-800 text-gray-100'}`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-3 group relative ${msg.role==='user'?'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/20':msg.role==='system'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='error'?'bg-red-900/50 text-red-300 border border-red-800':msg.role==='tool_use'?'bg-amber-900/30 text-amber-300 text-sm border border-amber-800/50':msg.role==='tool_result'?'bg-app-surface text-text-secondary text-xs font-mono border border-app-elevated':'bg-app-surface text-text-primary border-l-2 border-accent'}`}>
                   {msg.role==='system'&&<div className="whitespace-pre-wrap">{msg.content}</div>}
                   {msg.role==='tool_use'&&<><div className="font-medium mb-1 flex items-center gap-2">{currentTool===msg.name ? <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" /> : <span className="w-2 h-2 bg-gray-600 rounded-full" />}🔧 {msg.name}{currentTool===msg.name && <span className="text-amber-400 text-[10px] animate-pulse ml-auto">executing...</span>}</div><pre className="text-xs opacity-70">{JSON.stringify(msg.args,null,1).slice(0,200)}</pre></>}
                   {msg.role==='tool_result'&&<><div className="text-gray-500 mb-1">← {msg.name}</div><div className="whitespace-pre-wrap">{msg.result}</div></>}
                   {(msg.role==='assistant'||msg.role==='user')&&<div className="whitespace-pre-wrap">{msg.content}</div>}
                   {msg.role==='error'&&<div className="whitespace-pre-wrap text-sm">{msg.content}</div>}
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
-                    <div className={`text-[10px] mt-1 ${msg.role==='user'?'text-violet-300/60':'text-gray-600'}`}>{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
+                    <div className={`text-[10px] mt-1 ${msg.role==='user'?'text-indigo-300/60':'text-text-dim'}`}>{new Date(msg.ts).toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit'})}</div>
                   )}
                   {(msg.role==='assistant'||msg.role==='user')&&(
                     <button onClick={()=>navigator.clipboard.writeText(msg.content)}
-                      className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-700 hover:bg-gray-600 rounded-full w-6 h-6 flex items-center justify-center text-xs text-gray-300" title="Copy">📋</button>
+                      className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-app-elevated hover:bg-accent/20 rounded-full w-6 h-6 flex items-center justify-center text-xs text-text-secondary" title="Copy">📋</button>
                   )}
                 </div>
               </div>
