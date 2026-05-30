@@ -2,6 +2,14 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const API = 'http://127.0.0.1:9790'
 
+const CATEGORIES = {
+  'Core': ['ceo'],
+  'Tech': ['dev', 'analytics', 'security'],
+  'Business': ['sales', 'leadfinder', 'offers', 'finance'],
+  'Marketing': ['marketing', 'seo', 'imggen'],
+  'Support': ['support', 'memory', 'docsagent', 'consultant'],
+}
+
 import SettingsPanel from './components/SettingsPanel'
 import FileBrowser from './components/FileBrowser'
 import LeadsPanel from './components/LeadsPanel'
@@ -51,6 +59,8 @@ function App() {
   const [schedAgentId, setSchedAgentId] = useState('analytics')
   const [schedTask, setSchedTask] = useState('')
   const [schedInterval, setSchedInterval] = useState(60)
+
+  const [collapsedCategories, setCollapsedCategories] = useState({})
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -636,7 +646,7 @@ function App() {
       <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
         <span className="text-violet-400 font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-green-500 animate-pulse':'bg-red-500'}`} />
-        <div className="h-4 w-px bg-gray-700 mx-2 shrink-0" />
+        <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
         {allProjects.filter(p => p !== 'default').map(p => (
           <button key={p} onClick={async () => {
             try {
@@ -666,57 +676,86 @@ function App() {
 
       <div className="flex flex-1 min-h-0">
         {/* LEFT SIDEBAR */}
-        <div className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-            <h1 className="text-sm font-bold text-violet-400">AIONCLAW</h1>
+        <div className="w-56 bg-app-surface border-r border-app-elevated flex flex-col shrink-0">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-app-elevated">
+            <h1 className="text-sm font-bold text-accent">AIONCLAW</h1>
           </div>
           {sidebarContent ? (
             <div className="flex-1 overflow-hidden">{sidebarContent}</div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex flex-wrap gap-0.5 p-2 border-b border-gray-800 overflow-y-auto max-h-[200px]">
-                {agents.map(a => {
+              <div className="flex-1 overflow-y-auto p-2 space-y-3">
+                {Object.entries(CATEGORIES).map(([cat, agentIds]) => {
+                  const catAgents = agents.filter(a => agentIds.includes(a.id))
+                  if (catAgents.length === 0) return null
+                  const hasActive = catAgents.some(a => a.id === activeAgent)
+                  const expanded = !collapsedCategories[cat]
+                  return (
+                    <div key={cat} className="space-y-0.5">
+                      <button onClick={() => setCollapsedCategories(prev => ({...prev, [cat]: !prev[cat]}))}
+                        className={`w-full flex items-center gap-1 px-2 text-[9px] uppercase tracking-wider font-medium transition-colors ${hasActive ? 'text-accent' : 'text-text-dim hover:text-text-secondary'}`}>
+                        <span className="text-[8px]">{expanded ? '▾' : '▸'}</span>{cat}
+                      </button>
+                      {expanded && catAgents.map(a => {
+                        const isActive = activeAgent === a.id
+                        const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
+                        return (
+                          <button key={a.id} onClick={()=>switchAgent(a.id)}
+                            className={`w-full text-left px-3 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'border-l-2 border-accent bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'} ${isThinking ? 'animate-pulse' : ''}`}>
+                            {isThinking && <span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse shrink-0"/>}
+                            <span className="shrink-0">{a.icon}</span>
+                            <span className="truncate">{a.name}</span>
+                            {isActive && <span className="w-1 h-1 bg-accent rounded-full ml-auto shrink-0"/>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+                {agents.filter(a => !Object.values(CATEGORIES).flat().includes(a.id)).map(a => {
                   const isActive = activeAgent === a.id
-                  const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
                   return (
                     <button key={a.id} onClick={()=>switchAgent(a.id)}
-                      className={`px-2 py-1 text-[10px] rounded transition-colors flex items-center gap-1 ${isActive?'bg-violet-600/30 text-violet-300 border border-violet-500/30':'hover:bg-gray-800 text-gray-500 border border-transparent'} ${isThinking?'animate-pulse border-amber-500/50':''}`}>
-                      {isThinking&&<span className="w-1 h-1 bg-amber-400 rounded-full"/>}
-                      {a.icon}<span className="truncate max-w-[50px]">{a.name.split(' ')[0]}</span>
+                      className={`w-full text-left px-3 py-1.5 text-[11px] rounded transition-all flex items-center gap-2 ${isActive ? 'border-l-2 border-accent bg-accent/10 text-text-primary' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'}`}>
+                      <span className="shrink-0">{a.icon}</span>
+                      <span className="truncate">{a.name}</span>
                     </button>
                   )
                 })}
               </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+              <div className="px-2 py-1 border-t border-app-elevated">
                 <button onClick={addSession}
-                  className="w-full text-sm text-gray-500 hover:text-violet-400 px-3 py-2 rounded-lg border border-dashed border-gray-700 hover:border-violet-500/50 transition-colors flex items-center gap-2 mb-2">
-                  <span className="text-lg leading-none">+</span><span>New Chat</span>
+                  className="w-full text-xs text-text-secondary hover:text-accent px-3 py-2 rounded-lg border border-dashed border-app-elevated hover:border-accent/40 transition-colors flex items-center gap-2">
+                  <span className="text-sm leading-none">+</span><span>New Chat</span>
                 </button>
+              </div>
+              {/* Session tabs */}
+              <div className="max-h-[200px] overflow-y-auto px-2 pb-2 space-y-0.5">
                 {agentSessions.map(s => {
                   const isActive = activeSession?.sessionId === s.id
                   const msgCount = messages.filter(m => m._aid===activeAgent && m._sid===s.id).length
                   return (
                     <button key={s.id} onClick={()=>switchToSession(activeAgent,s.id)}
-                      className={`w-full text-left text-xs px-3 py-2 rounded-lg transition-colors flex items-center gap-2 ${isActive?'bg-violet-600/20 text-violet-300 border border-violet-500/30':'hover:bg-gray-800/60 text-gray-400 border border-transparent'}`}>
+                      className={`w-full text-left text-[11px] px-3 py-1.5 rounded transition-all flex items-center gap-2 ${isActive ? 'bg-accent/10 text-text-primary border-l-2 border-accent' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'}`}>
                       <span className="text-sm shrink-0">💬</span>
                       <div className="flex-1 min-w-0">
                         <div className="truncate">{s.label}</div>
-                        {msgCount > 0 && <div className="text-[9px] text-gray-600">{msgCount} msgs</div>}
+                        {msgCount > 0 && <div className="text-[9px] text-text-dim">{msgCount} msgs</div>}
                       </div>
                     </button>
                   )
                 })}
               </div>
-              <div className="border-t border-gray-800 p-2.5">
-                <div className="text-[9px] text-gray-600 mb-1.5 uppercase tracking-wider">Agent Status</div>
+              <div className="border-t border-app-elevated p-2.5">
+                <div className="text-[9px] text-text-dim mb-1.5 uppercase tracking-wider">Agent Status</div>
                 <div className="flex flex-wrap gap-1">
                   {agents.map(a => {
                     const status = activeAgents[a.id]
                     const isThinking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
-                    const dotClass = isThinking?'bg-amber-400 animate-pulse':status==='writing'?'bg-green-400 animate-pulse':status&&status!=='idle'?'bg-amber-500':'bg-gray-700'
+                    const dotClass = isThinking?'bg-accent animate-pulse':status==='writing'?'bg-success animate-pulse':status&&status!=='idle'?'bg-warning':'bg-text-dim'
                     return (
                       <span key={a.id} className="relative group" title={`${a.name}: ${isThinking?'working...':status||'idle'}`}>
-                        <span className={`inline-block text-[10px] px-1 py-0.5 rounded ${isThinking?'bg-amber-900/30':status==='writing'?'bg-green-900/30':'bg-gray-800'}`}>
+                        <span className={`inline-block text-[10px] px-1 py-0.5 rounded ${isThinking?'bg-accent/10':status==='writing'?'bg-success/10':'bg-app-elevated'}`}>
                           <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotClass} mr-0.5 align-middle`}/>
                           <span className="align-middle">{a.icon}</span>
                         </span>
