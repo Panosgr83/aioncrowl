@@ -6,7 +6,7 @@ import LeadsPanel from './components/LeadsPanel'
 const API = 'http://127.0.0.1:9790'
 
 const CATEGORIES = {
-  'Core': ['ceo'],
+  'Core': ['ceo', 'pm'],
   'Tech': ['dev', 'analytics', 'security'],
   'Business': ['sales', 'leadfinder', 'offers', 'finance'],
   'Marketing': ['marketing', 'seo', 'content', 'imggen'],

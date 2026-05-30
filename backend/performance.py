@@ -6,7 +6,7 @@ PERF_FILE = os.path.join(os.path.expanduser("~/AION"), "MEMORY", "performance.js
 TIME_ESTIMATES = {
     "dev": 30, "leadfinder": 25, "sales": 20, "marketing": 20, "support": 15,
     "analytics": 30, "security": 20, "finance": 20, "memory": 10, "ceo": 15,
-    "imggen": 35, "seo": 20, "offers": 20, "consultant": 20, "content": 25, "docsagent": 25,
+    "imggen": 35, "seo": 20, "offers": 20, "pm": 20, "consultant": 20, "content": 25, "docsagent": 25,
 }
 
 def get_eta(agent_id, steps=1):

@@ -286,7 +286,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent", "ceo"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent", "ceo"],
                         "description": "Ποιος agent θα λάβει το μήνυμα"
                     },
                     "message": {"type": "string", "description": "Το μήνυμα προς τον agent"},
@@ -306,7 +306,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                        "enum": ["ceo", "dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent"],
                         "description": "Σε ποιον agent να σταλεί το αρχείο"
                     },
                     "file_path": {"type": "string", "description": "Απόλυτο path του αρχείου προς αποστολή"},
@@ -334,7 +334,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "agent_id": {
                         "type": "string",
-                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                        "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent"],
                         "description": "Ποιος agent θα εκτελέσει την εργασία"
                     },
                     "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
@@ -359,7 +359,7 @@ TOOL_DEFINITIONS = [
                             "properties": {
                                 "agent_id": {
                                     "type": "string",
-                                    "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "consultant", "docsagent"],
+                                    "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent"],
                                     "description": "Ποιος agent θα εκτελέσει την εργασία"
                                 },
                                 "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
