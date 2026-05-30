@@ -199,6 +199,13 @@ def run_agent(ctx, engine_override=""):
                 engine_id = engine["id"]
                 record_engine_perf(engine_id, t1 - t0, True)
 
+                if not msg.get("tool_calls"):
+                    from tools import parse_xml_tool_calls
+                    xml_tools, _clean = parse_xml_tool_calls(msg.get("content", ""))
+                    if xml_tools:
+                        msg["tool_calls"] = xml_tools
+                        msg["content"] = _clean
+
                 if msg.get("tool_calls"):
                     ctx.add_message("assistant", msg.get("content") or "", tool_calls=msg["tool_calls"])
                     tool_results = []
@@ -215,6 +222,7 @@ def run_agent(ctx, engine_override=""):
                         ctx.add_message("tool", result, tool_call_id=tc_id)
                         tool_results.append({"name": func_name, "result": result[:200]})
 
+                    t2 = time.time()
                     final_resp = call_engine(engine, trim_messages(ctx.messages), stream=False)
                     t3 = time.time()
                     record_engine_perf(engine_id, t3 - t2, True)
@@ -934,6 +942,22 @@ async def websocket_chat(ws: WebSocket):
                             continue
                 t1 = time.time()
                 record_engine_perf(engine["id"], t1 - t0, True)
+
+                if not collected_tools:
+                    from tools import parse_xml_tool_calls
+                    xml_tools, _clean = parse_xml_tool_calls(full_content)
+                    if xml_tools:
+                        collected_tools = []
+                        for xtc in xml_tools:
+                            collected_tools.append({
+                                "index": len(collected_tools),
+                                "id": xtc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": xtc["function"]["name"],
+                                    "arguments": xtc["function"]["arguments"]
+                                }
+                            })
 
                 if collected_tools:
                     combined_tools = []
