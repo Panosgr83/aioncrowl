@@ -400,16 +400,16 @@ function App() {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
             if ((data.agent_id === activeAgentRef.current || activeAgentRef.current === 'ceo') && data.exchange) {
               setMessages(prev => {
+                const ceoSession = activeSession?.sessionId || 'default'
                 const newMsgs = data.exchange.filter(m =>
-                  !prev.some(p => p._aid === m._aid && p._sid === m._sid &&
+                  !prev.some(p => p._aid === m._aid && p._sid === ceoSession &&
                     p.content === m.content && p.role === m.role)
-                ).map(m => ({...m, ts: m.ts || new Date().toISOString()}))
-                // Also add delegate responses to CEO's session so they're visible in CEO chat
+                ).map(m => ({...m, _sid: ceoSession, ts: m.ts || new Date().toISOString()}))
                 if (activeAgentRef.current === 'ceo' && data.agent_id !== 'ceo') {
                   const ceoMsgs = data.exchange.filter(m =>
-                    !prev.some(p => p._aid === 'ceo' && p._sid === m._sid &&
+                    !prev.some(p => p._aid === 'ceo' && p._sid === ceoSession &&
                       p.content === m.content && p.role === m.role)
-                  ).map(m => ({...m, _aid: 'ceo', ts: m.ts || new Date().toISOString()}))
+                  ).map(m => ({...m, _aid: 'ceo', _sid: ceoSession, ts: m.ts || new Date().toISOString()}))
                   return [...prev, ...newMsgs, ...ceoMsgs]
                 }
                 return [...prev, ...newMsgs]
