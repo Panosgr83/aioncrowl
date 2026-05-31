@@ -90,7 +90,12 @@
 - **web_fetch retry** — 3 attempts with 1s/2s/4s backoff for 429/503
 - **Session save** — merge (append, never overwrite)
 
-### VPS Deployment
+### Local & VPS Deployment
+- **`scripts/deploy/deploy-local.sh`** — macOS local deployment
+  - Installs Python deps, builds frontend
+  - Creates launchd service (auto-start on boot)
+  - Checks ngrok token for remote access
+- **`scripts/deploy/com.aionclaw.backend.plist`** — macOS launchd plist (auto-restart, logging)
 - **`scripts/deploy/deploy.sh`** — one-command VPS setup on Ubuntu 24.04
   - Installs Python, Node, Nginx, certbot, UFW, fail2ban
   - Clones repo, builds frontend, installs deps
