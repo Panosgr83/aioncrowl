@@ -9,6 +9,8 @@ export default function SettingsPanel({ onClose }) {
   const [editingKey, setEditingKey] = useState(null)
   const [newKeyValue, setNewKeyValue] = useState('')
   const [saveStatus, setSaveStatus] = useState(null)
+  const [tunnel, setTunnel] = useState({ active: false, url: null, error: null, method: null, token_configured: false })
+  const [tunnelLoading, setTunnelLoading] = useState(false)
 
   const fetchAll = () => {
     fetch(`${API}/api/engines`).then(r=>r.json()).then(d => {
@@ -26,6 +28,9 @@ export default function SettingsPanel({ onClose }) {
     }).catch(()=>{})
     fetch(`${API}/api/engine-perf`).then(r=>r.json()).then(d => {
       setPerf(d)
+    }).catch(()=>{})
+    fetch(`${API}/api/tunnel/status`).then(r=>r.json()).then(d => {
+      setTunnel(d)
     }).catch(()=>{})
   }
 
@@ -52,6 +57,17 @@ export default function SettingsPanel({ onClose }) {
     } catch {
       setSaveStatus('error')
     }
+  }
+
+  const toggleTunnel = async () => {
+    setTunnelLoading(true)
+    try {
+      const ep = tunnel.active ? `${API}/api/tunnel/stop` : `${API}/api/tunnel/start`
+      const r = await fetch(ep, { method: 'POST' })
+      const d = await r.json()
+      setTunnel(d)
+    } catch {}
+    setTunnelLoading(false)
   }
 
   return (
@@ -136,6 +152,44 @@ export default function SettingsPanel({ onClose }) {
           </div>
         )
       })}
+      <div className="text-gray-500 uppercase font-medium text-[10px] mt-2 mb-1">Remote Access</div>
+      <div className="bg-gray-800/40 rounded p-2">
+        <div className="flex items-center justify-between">
+          <div className="flex-1 min-w-0">
+            {tunnel.active ? (
+              <div>
+                <div className="text-green-400 font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block animate-pulse" />
+                  Active
+                </div>
+                <a href={tunnel.url} target="_blank" rel="noopener noreferrer"
+                  className="text-accent hover:underline text-[10px] font-mono break-all">{tunnel.url}</a>
+                <div className="text-gray-600 text-[8px] mt-0.5">via {tunnel.method}</div>
+              </div>
+            ) : tunnel.error ? (
+              <div>
+                <div className="text-yellow-400 text-[10px]">{tunnel.error}</div>
+                {!tunnel.token_configured && (
+                  <div className="text-gray-600 text-[8px] mt-1">
+                    Get a free token at <span className="text-accent">ngrok.com</span> and add to ~/AION/.env:
+                    <code className="block bg-gray-900 rounded px-1 py-0.5 mt-0.5 text-[8px]">export NGROK_AUTH_TOKEN=your_token</code>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-gray-500 text-[10px]">Not connected</div>
+            )}
+          </div>
+          <button onClick={toggleTunnel} disabled={tunnelLoading}
+            className={`text-[10px] px-2.5 py-1 rounded transition-colors whitespace-nowrap ${
+              tunnel.active
+                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                : 'bg-accent/20 text-accent hover:bg-accent/30'
+            } ${tunnelLoading ? 'opacity-50' : ''}`}>
+            {tunnelLoading ? '...' : tunnel.active ? 'Stop' : 'Start'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

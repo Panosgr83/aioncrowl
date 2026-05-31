@@ -947,6 +947,23 @@ async def read_file(path: str):
     except Exception as e:
         raise HTTPException(400, f"Read error: {e}")
 
+@app.post("/api/tunnel/start")
+async def start_tunnel():
+    from tunnel import start_tunnel as _start
+    result = _start(port=9790)
+    return result
+
+@app.post("/api/tunnel/stop")
+async def stop_tunnel():
+    from tunnel import stop_tunnel as _stop
+    result = _stop()
+    return result
+
+@app.get("/api/tunnel/status")
+async def tunnel_status():
+    from tunnel import get_tunnel_status
+    return get_tunnel_status()
+
 @app.websocket("/ws/chat")
 async def websocket_chat(ws: WebSocket):
     await ws.accept()
