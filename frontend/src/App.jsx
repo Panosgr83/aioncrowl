@@ -265,7 +265,8 @@ function App() {
       wsRef.current = null
     }
 
-    const ws = new WebSocket(`ws://127.0.0.1:9790/ws/chat`)
+    const wsUrl = (window.location.origin || 'http://127.0.0.1:9790').replace('http', 'ws')
+    const ws = new WebSocket(`${wsUrl}/ws/chat`)
     wsRef.current = ws
     setWsStatus('connecting')
     wsConnectAttempt.current += 1
@@ -434,7 +435,8 @@ function App() {
   useEffect(() => {
     let closed = false
     function connectCollab() {
-      const ws = new WebSocket(`ws://127.0.0.1:9790/ws/collab`)
+      const wsUrl2 = (window.location.origin || 'http://127.0.0.1:9790').replace('http', 'ws')
+      const ws = new WebSocket(`${wsUrl2}/ws/collab`)
       wsCollabRef.current = ws
       ws.onmessage = (e) => {
         try {

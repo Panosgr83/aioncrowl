@@ -487,3 +487,34 @@ body {
   color: var(--color-accent);
   border-bottom-color: var(--color-accent);
 }
+
+/* ── Responsive: Mobile (< 768px) ── */
+@media (max-width: 767px) {
+  .msg-bubble {
+    max-width: 92%;
+  }
+  .msg-bubble.system {
+    max-width: 98%;
+  }
+  .msg-row.user .msg-avatar {
+    display: none;
+  }
+}
+@media (max-width: 639px) {
+  .msg-bubble {
+    max-width: 96%;
+    border-radius: 14px;
+    padding: 8px 12px;
+  }
+  .msg-bubble.system {
+    max-width: 100%;
+    font-size: 9px;
+  }
+  .msg-row.user .msg-avatar {
+    display: none;
+  }
+  .render-html pre {
+    font-size: 0.7em;
+    padding: 0.5rem 0.6rem;
+  }
+}
