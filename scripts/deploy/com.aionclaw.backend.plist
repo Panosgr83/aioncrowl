@@ -6,7 +6,7 @@
     <string>com.aionclaw.backend</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>/opt/homebrew/bin/python3</string>
         <string>/Users/panagiotischoliasmenos/AION/aionclaw/backend/main.py</string>
     </array>
     <key>EnvironmentVariables</key>

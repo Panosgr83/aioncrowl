@@ -27,11 +27,14 @@ log "\n${YELLOW}[1/5]${NC} Verifying project structure..."
 [ -d "$FRONTEND_DIR" ] || fail "Frontend dir not found: $FRONTEND_DIR"
 ok "Project structure OK"
 
-# ── 2. Python deps ──
-log "\n${YELLOW}[2/5]${NC} Checking Python dependencies..."
-pip3 install --quiet --break-system-packages fastapi uvicorn pydantic websockets httpx aiofiles pyngrok 2>/dev/null || \
-    pip3 install --quiet fastapi uvicorn pydantic websockets httpx aiofiles pyngrok
-ok "Python deps OK"
+# ── 2. Python ──
+log "\n${YELLOW}[2/5]${NC} Checking Python..."
+PYTHON=$(which python3)
+if ! $PYTHON -c "import fastapi" 2>/dev/null; then
+    $PYTHON -m pip install --quiet --break-system-packages fastapi uvicorn pydantic websockets httpx aiofiles pyngrok 2>/dev/null || \
+    $PYTHON -m pip install --quiet fastapi uvicorn pydantic websockets httpx aiofiles pyngrok
+fi
+ok "Python: $PYTHON"
 
 # ── 3. Frontend build ──
 log "\n${YELLOW}[3/5]${NC} Building frontend..."
@@ -42,6 +45,8 @@ ok "Frontend built"
 
 # ── 4. Install launchd service ──
 log "\n${YELLOW}[4/5]${NC} Installing launchd service..."
+# Use detected Python path
+sed -i '' "s|<string>/.*bin/python3</string>|<string>$PYTHON</string>|" "$PLIST"
 cp "$PLIST" "$HOME/Library/LaunchAgents/"
 
 # Unload if already loaded
