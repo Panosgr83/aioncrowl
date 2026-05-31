@@ -154,28 +154,33 @@
 
 ## Git Log (τελευταίες εγγραφές)
 ```
-7b1ae58 add: auto engine fallback + memory recall cache 30s
-578a80e add: Agent Console + real-time comm log + full timestamps
-c1ac29f ui: steps 4-8 polish — tool bar, system tiers, wave typing, drawer tabs, input bar
-dda4181 add: runtime tool permission filtering + opencode.jsonc
-a53d5c2 add PM Agent + projects.json with auto-create and deadline parsing
-a28978e add reasoning instructions to all 16 agents
-e04abc3 add Content Agent + read_leads to offers & consultant
+eaa65ef add: Working Team sidebar + agent responses visible in CEO chat
+ad6b8a4 rework: weighted engine scoring + sambanova tools=False + non-tool engine skip
+f56ac2c fix: streaming path non-streaming first call for tool_calls
+6a849c1 P1/P2/P3 + XML parser + CEO tool-first rule
+54d24c3 fix: t2 bug in run_agent + openrouter boost
+61d4994 CEO heartbeat + live console bottom bar
+d8c830e Agent visibility: bar dots + console pulse + sidebar
+c70dd97 Performance: parallel priority + max_tokens + engine
+acc0ff6 Bug fix: chat isolation + redundant UI + speed
+578a80e Agent Console + real-time comm log
 ```
 
 ## Εκκρεμή (pending tasks)
 
-| # | Τι | Αρχεία | Status |
-|---|----|--------|--------|
-| 1 | ~~PM Agent~~ | (ολοκληρώθηκε) | **completed** (a53d5c2) |
-| 2 | UI Redesign Steps 2‑8 | App.jsx, index.css | **completed** |
-| 3 | Runtime tool permission enforcement | main.py / agents.py (TOOL_DEFINITIONS filtering) | **completed** |
-| 4 | OpenCode project configuration (opencode.jsonc) | root του repo | **completed** |
-| 5 | Agent Console + real-time comm log | App.jsx, collaboration.py | **completed** |
-| 6 | Auto engine fallback + memory cache | engine/__init__.py, tools/__init__.py | **completed** |
-| 7 | main.py split (router files) | main.py → routers/ | postponed |
-| 8 | pytest suite | tests/ | postponed |
-| 9 | Structured output (guardrails) | agents.py | postponed |
+| # | Τι | Αρχεία | Status | Priority |
+|---|----|--------|--------|----------|
+| 1 | ~~PM Agent~~ | (ολοκληρώθηκε) | **completed** | — |
+| 2 | UI Redesign Steps 2‑8 | App.jsx, index.css | **completed** | — |
+| 3 | Runtime tool permission enforcement | main.py / agents.py (TOOL_DEFINITIONS filtering) | **completed** | — |
+| 4 | OpenCode project configuration (opencode.jsonc) | root του repo | **completed** | — |
+| 5 | Agent Console + real-time comm log | App.jsx, collaboration.py | **completed** | — |
+| 6 | Auto engine fallback + memory cache | engine/__init__.py, tools/__init__.py | **completed** | — |
+| 7 | main.py split (router files) | main.py → routers/ | postponed | LOW |
+| 8 | pytest suite | tests/ | postponed | LOW |
+| 9 | Structured output (guardrails) | agents.py | postponed | LOW |
+| 10 | PM Agent entry + CEO routing | agents.py, tools/__init__.py, collaboration.py, performance.py, App.jsx, projects.json, company_profile.md | **completed** | **HIGH** |
+| 11 | Fix CSV export format | backend/main.py (export endpoint) | pending | **MEDIUM** |
 
 ### Λεπτομέρειες για τα νέα εκκρεμή
 
@@ -197,6 +202,28 @@ e04abc3 add Content Agent + read_leads to offers & consultant
 | 6. Input bar pill design | ✅ |
 | 7. Typing/progress indicators | ✅ |
 | 8. Context drawer tabs | ✅ |
+
+### Fix #10 — PM Agent entry + CEO routing
+Νέος agent "pm" (Project Manager) που:
+- Αυτόματα δημιουργεί/διαχειρίζεται `projects.json`
+- CEO τον καλεί αυτόματα όταν χρειάζεται project tracking
+- Tools: read_leads, read_file/write_file, list_dir
+- Task type: reasoning
+- Προσθήκη σε: agents.py (ορισμός), collaboration.py (step_estimates), performance.py (TIME_ESTIMATES), App.jsx (CATEGORIES), company_profile.md
+
+### Fix #11 — CSV Export Format
+Τρέχον πρόβλημα:
+- Header: 5 columns, πραγματικά data: 3 columns
+- Newlines ως literal `↵` αντί για `\n`
+- Tool calls (`<longcat_tool_call>`) μέσα στα messages
+- BOM encoding (utf-8-sig)
+
+Επιθυμητό format:
+- 5 columns με data: Agent, Date, Role, Timestamp, Message
+- Standard `\n` newlines
+- Tool calls stripped πριν export
+- UTF-8 χωρίς BOM
+- Timestamps: ISO 8601 (2026-05-30T17:19:01Z)
 
 ## Known Issues
 - `imggen` naming confusion (σχεδίαση vs εικόνα) – postponed (6+ αρχεία)

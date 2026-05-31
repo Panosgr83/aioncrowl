@@ -6,8 +6,11 @@ export default function SettingsPanel({ onClose }) {
   const [statuses, setStatuses] = useState({})
   const [keys, setKeys] = useState([])
   const [perf, setPerf] = useState(null)
+  const [editingKey, setEditingKey] = useState(null)
+  const [newKeyValue, setNewKeyValue] = useState('')
+  const [saveStatus, setSaveStatus] = useState(null)
 
-  useEffect(() => {
+  const fetchAll = () => {
     fetch(`${API}/api/engines`).then(r=>r.json()).then(d => {
       setEngines(d.engines||[])
       const s = {}
@@ -24,46 +27,69 @@ export default function SettingsPanel({ onClose }) {
     fetch(`${API}/api/engine-perf`).then(r=>r.json()).then(d => {
       setPerf(d)
     }).catch(()=>{})
-  }, [])
+  }
+
+  useEffect(() => { fetchAll() }, [])
+
+  const updateKey = async (engineId) => {
+    if (!newKeyValue.trim()) return
+    setSaveStatus('saving')
+    try {
+      const r = await fetch(`${API}/api/keys`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({engine_id: engineId, api_key: newKeyValue})
+      })
+      if (r.ok) {
+        setSaveStatus('saved')
+        setEditingKey(null)
+        setNewKeyValue('')
+        fetchAll()
+        setTimeout(() => setSaveStatus(null), 2000)
+      } else {
+        setSaveStatus('error')
+      }
+    } catch {
+      setSaveStatus('error')
+    }
+  }
 
   return (
     <div className="p-3 overflow-y-auto h-full text-xs flex flex-col gap-2">
       <div className="flex items-center justify-between mb-2">
         <span className="text-gray-500 uppercase font-medium">Settings</span>
-        <button onClick={onClose} className="text-gray-500 hover:text-violet-400 transition-colors text-[10px]">✕</button>
+        <div className="flex items-center gap-2">
+          {saveStatus === 'saved' && <span className="text-green-400 text-[9px]">✓ saved</span>}
+          {saveStatus === 'error' && <span className="text-red-400 text-[9px]">✕ error</span>}
+          <button onClick={fetchAll} className="text-gray-500 hover:text-violet-400 transition-colors text-[10px]">↻</button>
+          <button onClick={onClose} className="text-gray-500 hover:text-violet-400 transition-colors text-[10px]">✕</button>
+        </div>
       </div>
 
       <div className="text-gray-500 uppercase font-medium text-[10px] mt-2 mb-1">Engines</div>
-      {engines.map(e => {
-        const p = perf?.stats?.[e.id] || {}
-        const speedColor = e.speed_rating === 'very_fast' ? 'text-green-400' : e.speed_rating === 'fast' ? 'text-emerald-400' : e.speed_rating === 'medium' ? 'text-yellow-400' : 'text-orange-400'
-        return (
+      {engines.map(e =>
         <div key={e.id} className="flex items-center justify-between bg-gray-800/60 rounded p-2">
           <div className="flex-1 min-w-0">
             <div className="text-gray-200 font-medium flex items-center gap-1">
               {e.name}
-              <span className={`text-[8px] font-mono ${speedColor}`}>{e.speed_rating}</span>
+              <span className="text-[8px] font-mono">{e.speed_rating}</span>
               <span className="text-[8px] text-gray-600 font-mono">⚡{e.capability}</span>
             </div>
             <div className="text-gray-500 text-[9px]">#{e.priority} {e.model}</div>
-            {p.calls > 0 && (
+            {perf?.stats?.[e.id]?.calls > 0 && (
               <div className="text-gray-600 text-[8px] mt-0.5">
-                {p.calls} calls · avg {p.avg_time}s · {p.success_rate}% success
+                {perf.stats[e.id].calls} calls · avg {perf.stats[e.id].avg_time}s · {perf.stats[e.id].success_rate}% success
               </div>
             )}
             {e.rate_limit && (
-              <div className={`text-[8px] mt-0.5 ${e.rate_limit.throttled ? 'text-red-400' : 'text-gray-600'}`}>
+              <div className="text-[8px] mt-0.5">
                 {e.rate_limit.calls_in_window}/{e.rate_limit.max_calls} RPM
-                {e.rate_limit.throttled && <span> · wait {e.rate_limit.wait_seconds}s</span>}
               </div>
             )}
           </div>
-          <div className={`flex items-center gap-1 text-[9px] ${e.status === 'active' ? 'text-green-400' : 'text-red-400'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${e.status === 'active' ? 'bg-green-400' : 'bg-red-400'}`} />
-            {e.status}
-          </div>
+          <div className="flex items-center text-[9px]">{e.status}</div>
         </div>
-      )})}
+      )}
 
       <div className="text-gray-500 uppercase font-medium text-[10px] mt-2 mb-1">Engine Performance</div>
       {perf?.stats && Object.entries(perf.stats).sort((a,b) => (b[1].success_rate||0) - (a[1].success_rate||0)).map(([id, s]) => (
@@ -84,12 +110,32 @@ export default function SettingsPanel({ onClose }) {
       )}
 
       <div className="text-gray-500 uppercase font-medium text-[10px] mt-2 mb-1">API Keys</div>
-      {keys.map(k => (
-        <div key={k.id} className="flex items-center justify-between bg-gray-800/40 rounded p-1.5">
-          <span className="text-gray-300">{k.id}</span>
-          <span className="text-gray-600 font-mono text-[9px]">{k.masked}</span>
-        </div>
-      ))}
+      {engines.map(eng => {
+        const k = keys.find(x => x.id === eng.id)
+        const isEditing = editingKey === eng.id
+        return (
+          <div key={eng.id} className="bg-gray-800/40 rounded p-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-300">{eng.id}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-600 font-mono text-[9px]">{k?.masked || 'not set'}</span>
+                <button onClick={() => { setEditingKey(isEditing ? null : eng.id); setNewKeyValue('') }}
+                  className="text-gray-500 hover:text-accent transition-colors text-[9px]">{isEditing ? '✕' : '✎'}</button>
+              </div>
+            </div>
+            {isEditing && (
+              <div className="flex gap-1 mt-1.5">
+                <input value={newKeyValue} onChange={ev => setNewKeyValue(ev.target.value)}
+                  placeholder="Paste new API key..."
+                  className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-300 focus:outline-none focus:border-accent placeholder:text-gray-600 font-mono"
+                  onKeyDown={ev => { if (ev.key === 'Enter') updateKey(eng.id) }} />
+                <button onClick={() => updateKey(eng.id)}
+                  className="text-[9px] px-2 py-1 bg-accent/20 text-accent rounded hover:bg-accent/30 transition-colors">Save</button>
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -21,6 +21,7 @@ MAX_TOOL_ITER = 5
 
 sessions = {}
 active_connections = set()
+session_engine_cache = {}  # session_id -> engine_id that worked
 
 @asynccontextmanager
 async def lifespan(app):
@@ -59,8 +60,14 @@ async def auth_middleware(request: Request, call_next):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
-SYSTEM_PROMPT = """Είσαι ο AION CEO Agent, το κεντρικό AI σύστημα της AION Web Solutions.
-Απαντάς στα Ελληνικά (με αγγλικούς τεχνικούς όρους όπου χρειάζεται).
+GREEK_LANG = """ΓΡΑΨΕ ΣΕ ΣΩΣΤΑ ΕΛΛΗΝΙΚΑ:
+- Χρησιμοποίησε σωστή γραμματική, συντακτικό, τονισμό και ορθογραφία
+- Απόφυγε αγγλισμούς και λέξεις-φαντάσματα
+- Οι προτάσεις να έχουν νόημα και ροή
+- Σεβασύ τις ελληνικές καταλήξεις (π.χ. -ος, -ης, -α, -ο, -ου, -ων)"""
+
+SYSTEM_PROMPT = f"""Είσαι ο AION CEO Agent, το κεντρικό AI σύστημα της AION Web Solutions.
+{GREEK_LANG}
 Είσαι ένα expert AI agent που μπορείς να χρησιμοποιείς εργαλεία για να:
 - Διαβάζεις και γράφεις αρχεία
 - Εκτελείς commands
@@ -93,8 +100,13 @@ class AgentContext:
         self.message_count = 0
         self.last_summary_len = 0
 
+        from agents import get_agents
         agent = get_agent(agent_id)
         base_prompt = system_prompt or agent["system_prompt"]
+
+        # Inject Greek language instruction for all agents
+        if GREEK_LANG not in base_prompt:
+            base_prompt += f"\n\n{GREEK_LANG}"
 
         memory_context = get_context_for_agent(agent_id)
         if memory_context:
@@ -161,12 +173,20 @@ class AgentContext:
 
 MAX_CONTEXT_MSGS = 12
 
+def sanitize_messages(messages):
+    """Remove unsupported fields (ts, etc.) before sending to API."""
+    allowed = {"role", "content", "tool_calls", "tool_call_id", "name"}
+    clean = []
+    for m in messages:
+        clean.append({k: v for k, v in m.items() if k in allowed})
+    return clean
+
 def trim_messages(messages):
     """Keep system prompt + last N messages for context efficiency."""
     system = [m for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     trimmed = non_system[-MAX_CONTEXT_MSGS:]
-    return system + trimmed
+    return sanitize_messages(system + trimmed)
 
 def run_agent(ctx, engine_override=""):
     if engine_override:
@@ -175,13 +195,28 @@ def run_agent(ctx, engine_override=""):
             return {"response": f"Engine '{engine_override}' not found", "engine_used": "none", "tool_calls": []}
         engines_to_try = [engine]
     else:
-        suggested = suggest_engine_for("general", needs_tools=ctx.tools_enabled)
-        engines_to_try = get_active_engines()
+        # CEO user-facing responses use reasoning for depth; sub-agents use speed
+        is_ceo = ctx.agent_id == "ceo"
+        task_type = "reasoning" if is_ceo else ("simple" if not ctx.tools_enabled else "general")
+        suggested = suggest_engine_for(task_type, needs_tools=ctx.tools_enabled)
+        engines_to_try = get_active_engines(task_type=task_type, needs_tools=ctx.tools_enabled)
+        # Put suggested engine first (highest score)
         if suggested and suggested in engines_to_try:
             engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
+        # Then move cached engine to front if it's still active
+        cached_id = session_engine_cache.get(ctx.session_id)
+        if cached_id:
+            cached = next((e for e in ENGINES if e["id"] == cached_id), None)
+            if cached and cached in engines_to_try:
+                engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
 
     if not engines_to_try:
         return {"response": "Δεν υπάρχει διαθέσιμο engine. Έλεγξε API keys και engine status.", "engine_used": "none", "tool_calls": []}
+
+    # Quick check: if last user message is short and conversational, try single-call first
+    user_msgs = [m for m in ctx.messages if m.get("role") == "user"]
+    last_user = user_msgs[-1]["content"] if user_msgs else ""
+    is_simple = len(last_user) < 200 and not any(w in last_user for w in ["γράψε", "δημιούργησε", "ανέλυσε", "βρες", "ψάξε", "διάβασε", "run", "execute", "write", "create", "search", "find", "read", "ανάλυσε", "γράψε μου", "φτιάξε"])
 
     last_error = ""
     for engine in engines_to_try:
@@ -190,7 +225,60 @@ def run_agent(ctx, engine_override=""):
         for attempt in range(2):
             try:
                 t0 = time.time()
+                engine_id = engine["id"]
                 msgs = trim_messages(ctx.messages)
+
+                # Try single-call first for simple messages (skip tool planning)
+                if is_simple and ctx.tools_enabled:
+                    tools_for_call = get_tool_definitions_for_agent(ctx.agent_id)
+                    resp = call_engine(engine, msgs, tools=tools_for_call, stream=False)
+                    t1 = time.time()
+                    data = resp.json()
+                    choice = data["choices"][0]
+                    msg = choice["message"]
+
+                    record_engine_perf(engine_id, t1 - t0, True)
+
+                    tool_calls = msg.get("tool_calls")
+                    if not tool_calls:
+                        from tools import parse_xml_tool_calls
+                        tool_calls, cleaned = parse_xml_tool_calls(msg.get("content", ""))
+                        if tool_calls:
+                            msg["content"] = cleaned
+
+                    if tool_calls:
+                        ctx.add_message("assistant", msg.get("content") or "", tool_calls=tool_calls)
+                        tool_results = []
+                        for tc in tool_calls[:MAX_TOOL_ITER]:
+                            if isinstance(tc, dict):
+                                func_name = tc.get("function", {}).get("name", "")
+                                func_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                                tc_id = tc.get("id", "")
+                            else:
+                                func_name = tc.function.name
+                                func_args = json.loads(tc.function.arguments)
+                                tc_id = tc.id
+                            result = execute_tool(func_name, func_args, ctx.agent_id)
+                            ctx.add_message("tool", result, tool_call_id=tc_id)
+                            tool_results.append({"name": func_name, "result": result[:200]})
+
+                        t2 = time.time()
+                        synthesis_type = "reasoning" if is_ceo else task_type
+                        final_resp = call_engine(engine, trim_messages(ctx.messages), stream=False, task_type=synthesis_type)
+                        t3 = time.time()
+                        record_engine_perf(engine_id, t3 - t2, True)
+                        final_data = final_resp.json()
+                        final_text = final_data["choices"][0]["message"].get("content", "")
+                        ctx.add_message("assistant", final_text)
+                        session_engine_cache[ctx.session_id] = engine_id
+                        return {"response": final_text, "engine_used": engine_id, "tool_calls": tool_results}
+                    else:
+                        text = msg.get("content", "")
+                        ctx.add_message("assistant", text)
+                        session_engine_cache[ctx.session_id] = engine_id
+                        return {"response": text, "engine_used": engine_id, "tool_calls": []}
+
+                # Normal two-call flow for complex messages or when simple path didn't trigger
                 tools_for_call = get_tool_definitions_for_agent(ctx.agent_id) if ctx.tools_enabled else None
                 resp = call_engine(engine, msgs, tools=tools_for_call, stream=False)
                 t1 = time.time()
@@ -198,7 +286,6 @@ def run_agent(ctx, engine_override=""):
                 choice = data["choices"][0]
                 msg = choice["message"]
 
-                engine_id = engine["id"]
                 record_engine_perf(engine_id, t1 - t0, True)
 
                 if not msg.get("tool_calls"):
@@ -231,17 +318,19 @@ def run_agent(ctx, engine_override=""):
                     final_data = final_resp.json()
                     final_text = final_data["choices"][0]["message"].get("content", "")
                     ctx.add_message("assistant", final_text)
+                    session_engine_cache[ctx.session_id] = engine_id
                     return {"response": final_text, "engine_used": engine_id, "tool_calls": tool_results}
                 else:
                     text = msg.get("content", "")
                     ctx.add_message("assistant", text)
+                    session_engine_cache[ctx.session_id] = engine_id
                     return {"response": text, "engine_used": engine_id, "tool_calls": []}
 
             except Exception as e:
-                last_error = str(e)
+                last_error = f"[{engine['id']}] {e}"
                 record_engine_perf(engine["id"], 0, False)
                 if "rate limit" in last_error.lower() or "too large" in last_error.lower():
-                    mark_engine(engine["id"], "rate_limited", 60)
+                    mark_engine(engine["id"], "rate_limited", 300)
                     break
                 continue
 
@@ -570,60 +659,6 @@ async def delete_project(name: str):
         shutil.rmtree(pdir)
     return {"ok": True}
 
-@app.get("/api/approvals/pending")
-async def approvals_pending():
-    from approval import get_pending
-    return {"approvals": get_pending()}
-
-class ApprovalAction(BaseModel):
-    request_id: str
-
-@app.post("/api/approvals/{request_id}/approve")
-async def approvals_approve(request_id: str):
-    from approval import approve as approve_req
-    from collaboration import bus, run_sub_agent, save_to_agent_session
-    req = approve_req(request_id, "user")
-    if not req:
-        return {"ok": False, "error": "Not found or already processed"}
-    bus.broadcast({
-        "type": "approval_result",
-        "request_id": request_id,
-        "status": "approved",
-        "ts": datetime.now().isoformat(),
-    })
-    agent_id = req.get("agent_id", "dev")
-    full_result = run_sub_agent(agent_id,
-        f"✅ Το αίτημα έγκρισης #{request_id} ΕΓΚΡΙΘΗΚΕ από τον χρήστη. "
-        f"Θέμα: {req['summary']}\n\n"
-        f"Συνέχισε ΤΩΡΑ με την πλήρη ανάλυση όπως είχες προγραμματίσει. "
-        f"Γράψε λεπτομερώς και εκτενώς.")
-    save_to_agent_session(agent_id, "default",
-        f"✅ Έγκριση #{request_id} για: {req['summary']}", full_result)
-    bus.broadcast({
-        "type": "agent_chat",
-        "agent_id": agent_id,
-        "session_id": "default",
-        "exchange": [
-            {"role": "user", "content": f"✅ Έγκριση #{request_id} — {req['summary']}", "_aid": agent_id, "_sid": "default"},
-            {"role": "assistant", "content": full_result[:3000], "_aid": agent_id, "_sid": "default"},
-        ]
-    })
-    return {"ok": True, "result": full_result[:2000]}
-
-@app.post("/api/approvals/{request_id}/reject")
-async def approvals_reject(request_id: str):
-    from approval import reject as reject_req
-    from collaboration import bus
-    req = reject_req(request_id)
-    if not req:
-        return {"ok": False, "error": "Not found or already processed"}
-    bus.broadcast({
-        "type": "approval_result",
-        "request_id": request_id,
-        "status": "rejected",
-        "ts": datetime.now().isoformat(),
-    })
-    return {"ok": True}
 
 SESSION_DIR = os.path.join(AION_DIR, "aionclaw", "sessions")
 SESSION_CACHE = {}  # full_key -> {"messages": list, "ts": float}
@@ -821,6 +856,62 @@ async def scheduler_run(job_id: str):
     ok = run_job_now(job_id)
     return {"status": "executed" if ok else "not_found"}
 
+@app.get("/api/export/doc")
+async def export_doc(session_id: str = "default", agent_id: str = "ceo"):
+    """Export session messages as a Word .doc file."""
+    from agents import get_agent
+    from datetime import datetime
+    session_path = _session_file(f"{agent_id}:{session_id}")
+    if not os.path.exists(session_path):
+        raise HTTPException(404, "Session not found")
+    try:
+        with open(session_path) as f:
+            data = json.load(f)
+    except:
+        raise HTTPException(400, "Failed to read session")
+
+    messages = data.get("messages", [])
+    agent = get_agent(agent_id)
+    aname = agent.get("name", agent_id) if agent else agent_id
+    aicon = agent.get("icon", "🤖") if agent else "🤖"
+    date = datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+    def fmt_ts(ts):
+        try: return datetime.fromisoformat(ts.replace("Z","+00:00")).strftime("%H:%M:%S")
+        except: return ""
+
+    rows = ""
+    for m in messages:
+        role = m.get("role", "")
+        content = (m.get("content","") or str(m.get("args","")) or m.get("result","") or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+        ts = fmt_ts(m.get("ts",""))
+        if role == "user":
+            rows += f"""<tr><td style="padding:8pt 12pt;background:#f0f4ff;border-bottom:1px solid #e5e7eb"><strong style="color:#6366f1">👤 User</strong> <span style="color:#999;font-size:8pt">({ts})</span><br/>{content}</td></tr>"""
+        elif role == "assistant":
+            rows += f"""<tr><td style="padding:8pt 12pt;background:#fafbff;border-bottom:1px solid #e5e7eb"><strong style="color:#6366f1">🤖 {aname}</strong> <span style="color:#999;font-size:8pt">({ts})</span><br/>{content}</td></tr>"""
+        elif role == "tool_use":
+            rows += f"""<tr><td style="padding:6pt 12pt;background:#fffbeb;border-bottom:1px solid #e5e7eb;font-size:9pt"><span style="color:#d97706">🔧 {m.get("name","tool")}</span></td></tr>"""
+        elif role == "tool_result":
+            rows += f"""<tr><td style="padding:6pt 12pt;background:#fafafa;border-bottom:1px solid #e5e7eb;font-size:8pt;color:#666">{content[:300]}</td></tr>"""
+
+    html = f"""<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><style>
+body{{font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1a1a2e;max-width:210mm;margin:20mm auto;padding:0 15mm}}
+h1{{font-size:18pt;font-weight:700;color:#6366f1;border-bottom:2px solid #6366f1;padding-bottom:6pt}}
+table{{width:100%;border-collapse:collapse}}
+</style></head><body>
+<h1>{aicon} {aname}</h1>
+<p style="color:#888;font-size:9pt">{date}</p>
+<table>{rows}</table>
+</body></html>"""
+
+    return HTMLResponse(content=html, headers={
+        "Content-Type": "application/msword",
+        "Content-Disposition": f'attachment; filename="{aname}_{date}.doc"',
+        "Access-Control-Expose-Headers": "Content-Disposition",
+    })
+
 @app.get("/api/files")
 async def list_files(path: str = ""):
     base = os.path.expanduser(path) if path else AION_DIR
@@ -899,10 +990,17 @@ async def websocket_chat(ws: WebSocket):
             if not engines_to_try:
                 engines_to_try = get_active_engines()
         else:
-            suggested = suggest_engine_for("general", needs_tools=tools_enabled)
-            engines_to_try = get_active_engines()
+            task_type = "reasoning" if agent_id == "ceo" else ("simple" if not tools_enabled else "general")
+            suggested = suggest_engine_for(task_type, needs_tools=tools_enabled)
+            engines_to_try = get_active_engines(task_type=task_type, needs_tools=tools_enabled)
             if suggested and suggested in engines_to_try:
                 engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
+            # Move cached engine to front if still active
+            cached_id = session_engine_cache.get(session_id)
+            if cached_id:
+                cached = next((e for e in ENGINES if e["id"] == cached_id), None)
+                if cached and cached in engines_to_try:
+                    engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
 
         last_error = ""
         response_text = ""
@@ -916,6 +1014,13 @@ async def websocket_chat(ws: WebSocket):
                 t0 = time.time()
                 engine_used = engine["id"]
                 await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
+                bus.broadcast({
+                    "type": "engine_call",
+                    "engine_id": engine["id"],
+                    "agent_id": agent_id,
+                    "status": "started",
+                    "ts": datetime.now().isoformat(),
+                })
                 bus.broadcast({
                     "type": "agent_thinking",
                     "agent_id": agent_id,
@@ -983,7 +1088,8 @@ async def websocket_chat(ws: WebSocket):
 
                     # Step 2: Stream the synthesis response
                     t2 = time.time()
-                    syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024)
+                    syn_type = "reasoning" if agent_id == "ceo" else task_type
+                    syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024, task_type=syn_type)
                     full_content = ""
                     for line in syn_resp.iter_lines():
                         if not line: continue
@@ -1038,6 +1144,7 @@ async def websocket_chat(ws: WebSocket):
                         {"role": "assistant", "content": (response_text or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
                     ]
                 })
+                session_engine_cache[session_id] = engine_used
                 await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})
                 # Log performance
                 try:
@@ -1048,13 +1155,13 @@ async def websocket_chat(ws: WebSocket):
                 break
 
             except Exception as e:
-                last_error = str(e)
+                last_error = f"[{engine['id']}] {e}"
                 record_engine_perf(engine["id"], 0, False)
                 error_lower = str(e).lower()
                 if "rate limit" in error_lower or "too large" in error_lower:
-                    mark_engine(engine["id"], "rate_limited", 60)
+                    mark_engine(engine["id"], "rate_limited", 300)
                 elif "quota" in error_lower or "billing" in error_lower:
-                    mark_engine(engine["id"], "quota_exhausted", 3600)
+                    mark_engine(engine["id"], "quota_exhausted", 7200)
                 elif "timeout" in error_lower or "connection" in error_lower:
                     mark_engine(engine["id"], "timeout", 120)
                 continue
@@ -1098,6 +1205,9 @@ async def websocket_collab(ws: WebSocket):
         print("Collab WS disconnected")
 
 if __name__ == "__main__":
+    # Ensure .env is loaded (redundant with engine._load_env but safe)
+    from engine import _load_env as _engine_load_env
+    _engine_load_env()
     import socket
     port = int(os.environ.get("PORT", 9789))
     print(f"AIONCLAW backend starting on http://127.0.0.1:{port}")

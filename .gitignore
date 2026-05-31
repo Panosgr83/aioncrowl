@@ -9,3 +9,5 @@ uploads/
 __pycache__/
 *.pyc
 knowledge/
+minimal-ui/
+backend/*.txt

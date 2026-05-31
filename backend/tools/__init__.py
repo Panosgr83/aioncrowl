@@ -393,35 +393,6 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "request_approval",
-            "description": "ΖΗΤΑ έγκριση για μακροσκελή απάντηση. Χρησιμοποίησέ το όταν πρέπει να γράψεις εκτενή ανάλυση (>500 λέξεις). Το αίτημα πάει στον χρήστη ΚΑΙ στον CEO. Περίμενε έγκριση πριν συνεχίσεις.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "description": "Σύντομη περίληψη του τι θέλεις να αναλύσεις (1-2 προτάσεις)"},
-                    "details": {"type": "string", "description": "Αναλυτική περιγραφή του τι θα γράψεις"}
-                },
-                "required": ["summary"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "approve_request",
-            "description": "ΕΓΚΡΙΝΕ ένα αίτημα έγκρισης από άλλο agent. Μόλις εγκριθεί, ο agent θα συνεχίσει με την πλήρη ανάλυση.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "Το ID του αιτήματος προς έγκριση"}
-                },
-                "required": ["request_id"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "query_kb",
             "description": "Αναζήτησε στο Knowledge Base του project. Επιστρέφει σχετικά αποσπάσματα από αρχεία και σημειώσεις που έχουν αποθηκευτεί στο project ή στο global knowledge base.",
             "parameters": {
@@ -431,6 +402,20 @@ TOOL_DEFINITIONS = [
                     "project": {"type": "string", "description": "Project name (προαιρετικό, default το τρέχον project)"}
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_history",
+            "description": "Διάβασε το ιστορικό συνομιλιών ενός agent. Επιστρέφει τα τελευταία μηνύματα για να δεις τι έχει κάνει ο agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "ID του agent (π.χ. dev, sales, memory)"}
+                },
+                "required": ["agent"]
             }
         }
     },
@@ -447,29 +432,178 @@ def resolve_path(path, agent_id=None):
 
 import re as _re
 
+def _extract_json_balanced(text, start_idx):
+    """Extract a balanced JSON object starting from an opening brace at start_idx.
+    Returns (json_str, end_idx) or (None, start_idx) on failure."""
+    if start_idx >= len(text) or text[start_idx] != '{':
+        return None, start_idx
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start_idx, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_str:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_str = not in_str
+            continue
+        if not in_str:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start_idx:i+1], i+1
+    return None, start_idx
+
 def parse_xml_tool_calls(text):
-    """Parse <invoke name='tool'>...</invoke> XML tool calls from engine responses.
+    """Parse XML/JSON tool calls from engine responses.
+    Supports:
+      - <|tool_call|> {"name": "...", "arguments": {...}}
+      - <functioncall> {"name": "...", "arguments": {...}}
+      - <function=name>...</function>
+      - <invoke name='tool'>...</invoke>
     Returns (tool_calls_list, cleaned_text) or (None, text) if no XML found."""
-    pattern = _re.compile(r'<invoke\s+name=["\']([^"\']+)["\']>(.*?)</invoke>', _re.DOTALL)
-    matches = list(pattern.finditer(text))
-    if not matches:
+    import re as _re2
+
+    # Find all tool call markers and try to extract JSON after them
+    markers = ['<|tool_call|>', '<functioncall>', '<invoke name=', '<function=']
+    close_tags = ['</|tool_call|>', '</functioncall>', '</invoke>', '</function>']
+
+    all_matches = []
+    idx = 0
+    while idx < len(text):
+        best_marker = None
+        best_pos = len(text)
+        for marker, close_tag in zip(markers, close_tags):
+            pos = text.find(marker, idx)
+            if 0 <= pos < best_pos:
+                best_pos = pos
+                best_marker = (marker, close_tag)
+
+        if best_marker is None or best_pos >= len(text):
+            break
+
+        marker, close_tag = best_marker
+        start = best_pos + len(marker)
+
+        # For <invoke name='xxx'> or <function=xxx>, skip to end of opening tag
+        if marker in ('<invoke name=', '<function='):
+            gt = text.find('>', start)
+            if gt >= 0:
+                start = gt + 1
+            else:
+                break
+
+        # Skip whitespace
+        while start < len(text) and text[start] in ' \t\n\r':
+            start += 1
+
+        # Try to extract balanced JSON
+        if start < len(text) and text[start] == '{':
+            json_str, end = _extract_json_balanced(text, start)
+            if json_str:
+                # Check for closing tag
+                if close_tag:
+                    close_idx = text.find(close_tag, start)
+                    if close_idx >= 0:
+                        end = close_idx + len(close_tag)
+                    else:
+                        # No closing tag found, use end of JSON
+                        pass
+                # For <invoke name='xxx'> format, extract name from opening tag
+                full_name = ""
+                if marker == '<invoke name=':
+                    m2 = _re2.search(r'name=["\']([^"\']+)["\']', text[best_pos:best_pos+80])
+                    if m2:
+                        full_name = m2.group(1)
+
+                all_matches.append((best_pos, end, text[start:end], full_name))
+                idx = end
+                continue
+
+        # Fallback: find closing tag
+        if close_tag:
+            close_idx = text.find(close_tag, start)
+            if close_idx >= 0:
+                content = text[start:close_idx].strip()
+                full_name = ""
+                if marker == '<invoke name=':
+                    m2 = _re2.search(r'name=["\']([^"\']+)["\']', text[best_pos:best_pos+80])
+                    if m2:
+                        full_name = m2.group(1)
+                all_matches.append((best_pos, close_idx + len(close_tag), content, full_name))
+                idx = close_idx + len(close_tag)
+                continue
+
+        idx = best_pos + len(marker)
+
+    if not all_matches:
         return None, text
+
+    # Sort by position (earliest first)
+    all_matches.sort(key=lambda x: x[0])
+
     tool_calls = []
-    for i, m in enumerate(matches):
-        name = m.group(1).strip()
-        args_text = m.group(2).strip()
+    for all_match in all_matches:
+        if len(all_match) == 4:
+            start_pos, end_pos, content, invoke_name = all_match
+        else:
+            start_pos, end_pos, content = all_match
+            invoke_name = ""
+        # Try to extract JSON
+        json_start = content.find('{')
+        if json_start >= 0:
+            json_str, _ = _extract_json_balanced(content, json_start)
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                except:
+                    data = None
+                if data:
+                    name = data.get("name", "") or data.get("function", "") or ""
+                    args = data.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except:
+                            args = {}
+                    if name:
+                        tool_calls.append({
+                            "id": f"call_{name}_{len(tool_calls)}",
+                            "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}
+                        })
+                        continue
+
+        # Fallback: parse key:value pairs (for old <invoke> format)
+        name = invoke_name or ""
         args = {}
-        for line in args_text.split('\n'):
+        for line in content.split('\n'):
             line = line.strip()
-            if ':' in line:
+            if not name and ':' in line:
+                name = line.split(':', 1)[0].strip()
+            elif ':' in line:
                 k, v = line.split(':', 1)
                 args[k.strip()] = v.strip()
-        tool_calls.append({
-            "id": f"call_{name}_{i}",
-            "type": "function",
-            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}
-        })
-    cleaned = pattern.sub('', text).strip()
+        if name:
+            tool_calls.append({
+                "id": f"call_{name}_{len(tool_calls)}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}
+            })
+
+    # Remove all matched patterns from text
+    cleaned = text
+    for m in reversed(sorted(all_matches, key=lambda x: x[0])):
+        start_pos, end_pos = m[0], m[1]
+        cleaned = cleaned[:start_pos] + cleaned[end_pos:]
+    cleaned = cleaned.strip()
+
     return tool_calls, cleaned
 
 def find_uploaded_file(fname):
@@ -905,89 +1039,36 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 lines.append(f"     Ρόλος: {a['role']}")
                 lines.append(f"     Εργαλεία: {tools_list}")
             return "\n".join(lines)
-        elif name == "request_approval":
-            from approval import create as create_approval, approve as approve_req
-            from collaboration import bus, run_sub_agent, save_to_agent_session
-            summary = args["summary"]
-            details = args.get("details", "")
-            req = create_approval(agent_id, summary, details)
-            # Auto-approve immediately — no waiting
-            approved = approve_req(req["id"], "system")
-            bus.broadcast({
-                "type": "approval_request",
-                "id": req["id"],
-                "request_id": req["id"],
-                "agent_id": agent_id,
-                "summary": summary,
-                "details": details[:500],
-                "ts": req["ts"],
-                "auto_approved": True,
-            })
-            bus.broadcast({
-                "type": "approval_result",
-                "request_id": req["id"],
-                "status": "approved",
-                "auto_approved": True,
-                "ts": datetime.now().isoformat(),
-            })
-            # Continue with full analysis
-            full_result = run_sub_agent(agent_id,
-                f"✅ Αίτημα έγκρισης #{req['id']} ΕΓΚΡΙΘΗΚΕ ΑΥΤΟΜΑΤΑ.\n"
-                f"Θέμα: {summary}\n\n"
-                f"Συνέχισε ΤΩΡΑ με την πλήρη ανάλυση όπως είχες προγραμματίσει. "
-                f"Γράψε λεπτομερώς και εκτενώς.")
-            save_to_agent_session(agent_id, "default",
-                f"✅ Αυτόμ. έγκριση #{req['id']} για: {summary}", full_result)
-            bus.broadcast({
-                "type": "agent_chat",
-                "agent_id": agent_id,
-                "session_id": "default",
-                "exchange": [
-                    {"role": "user", "content": f"✅ Αυτόμ. έγκριση #{req['id']} — {summary}", "_aid": agent_id, "_sid": "default"},
-                    {"role": "assistant", "content": full_result[:3000], "_aid": agent_id, "_sid": "default"},
-                ]
-            })
-            return (f"✅ Αίτημα #{req['id']} εγκρίθηκε αυτόματα.\n\n"
-                    f"Αποτέλεσμα:\n{full_result[:2000]}")
-        elif name == "approve_request":
-            from approval import approve as approve_req
-            from approval import get_all
-            from collaboration import bus, run_sub_agent, save_to_agent_session
-            req_id = args["request_id"]
-            req = approve_req(req_id, "ceo")
-            if not req:
-                return f"Δεν βρέθηκε εκκρεμές αίτημα: {req_id}"
-            bus.broadcast({
-                "type": "approval_result",
-                "request_id": req_id,
-                "status": "approved",
-                "ts": datetime.now().isoformat(),
-            })
-            agent_id = req.get("agent_id", "dev")
-            full_result = run_sub_agent(agent_id,
-                f"✅ Το αίτημα έγκρισης #{req_id} ΕΓΚΡΙΘΗΚΕ. "
-                f"Θέμα: {req['summary']}\n\n"
-                f"Συνέχισε ΤΩΡΑ με την πλήρη ανάλυση όπως είχες προγραμματίσει. "
-                f"Γράψε λεπτομερώς και εκτενώς.")
-            save_to_agent_session(agent_id, "default",
-                f"✅ Έγκριση #{req_id} για: {req['summary']}", full_result)
-            bus.broadcast({
-                "type": "agent_chat",
-                "agent_id": agent_id,
-                "session_id": "default",
-                "exchange": [
-                    {"role": "user", "content": f"✅ Έγκριση #{req_id} — {req['summary']}", "_aid": agent_id, "_sid": "default"},
-                    {"role": "assistant", "content": full_result[:3000], "_aid": agent_id, "_sid": "default"},
-                ]
-            })
-            return (f"Το αίτημα #{req_id} εγκρίθηκε. Ο agent {agent_id} ξεκίνησε την ανάλυση.\n\n"
-                    f"Αποτέλεσμα:\n{full_result[:2000]}")
         elif name == "query_kb":
             from kb import query_knowledge, format_kb_results
             q = args["query"]
             project = args.get("project", "")
             results = query_knowledge(project=project if project else None, query=q)
             return format_kb_results(results, q)
+        elif name == "get_agent_history":
+            target = args.get("agent", "")
+            import glob
+            session_dir = os.path.join(AION_DIR, "aionclaw", "sessions")
+            # Search all project dirs for this agent's session files
+            history_lines = []
+            for root, _dirs, files in os.walk(session_dir):
+                for fname in sorted(files):
+                    if fname.startswith(f"{target}:") and fname.endswith(".json"):
+                        fpath = os.path.join(root, fname)
+                        try:
+                            with open(fpath) as f:
+                                data = json.load(f)
+                            msgs = data.get("messages", [])
+                            for m in msgs[-10:]:
+                                role = m.get("role", "")
+                                content = (m.get("content","") or "")[:200]
+                                ts = m.get("ts","")[11:19] if m.get("ts") else ""
+                                history_lines.append(f"[{ts}] {role}: {content}")
+                        except:
+                            pass
+            if not history_lines:
+                return f"Δεν βρέθηκε ιστορικό για τον agent '{target}'"
+            return "Τελευταία μηνύματα:\n" + "\n".join(history_lines[-20:])
         return f"Unknown tool: {name}"
     except subprocess.TimeoutExpired as e:
         raise e

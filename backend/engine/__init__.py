@@ -23,8 +23,8 @@ ENGINES = [
      "priority": 1, "supports_tools": True, "max_tokens": 8192, "cooldown_until": 0, "headers": {},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
     {"id": "sambanova", "name": "SambaNova DeepSeek V3.1", "base_url": "https://api.sambanova.ai/v1", "model": "DeepSeek-V3.1",
-     "priority": 2, "supports_tools": False, "max_tokens": 131072, "cooldown_until": 0, "headers": {},
-     "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning"]},
+     "priority": 9, "supports_tools": False, "max_tokens": 131072, "cooldown_until": 0, "headers": {},
+     "capability": "medium", "speed_rating": "slow", "suitable_for": ["coding", "reasoning"]},
     {"id": "openrouter_deepseek", "name": "DeepSeek V4 Flash (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-v4-flash:free",
      "priority": 1, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
@@ -44,8 +44,17 @@ ENGINES = [
      "priority": 8, "supports_tools": True, "max_tokens": 8192, "cooldown_until": 0, "headers": {},
      "capability": "high", "speed_rating": "medium", "suitable_for": ["general", "reasoning", "tools"]},
     {"id": "ollama", "name": "Ollama Qwen 2.5 14B", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:14b",
-     "priority": 3, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {},
+     "priority": 9, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {},
+     "capability": "low", "speed_rating": "slow", "suitable_for": ["simple", "tools"]},
+    {"id": "openrouter_qwen", "name": "Qwen3 Next 80B (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "qwen/qwen3-next-80b-a3b-instruct:free",
+     "priority": 3, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
+    {"id": "openrouter_gemma", "name": "Gemma 4 31B (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "google/gemma-4-31b-it:free",
+     "priority": 3, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
+     "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "reasoning", "tools"]},
+    {"id": "openrouter_nemotron", "name": "Nemotron Nano 9B (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "nvidia/nemotron-nano-9b-v2:free",
+     "priority": 8, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
+     "capability": "low", "speed_rating": "medium", "suitable_for": ["simple", "quick_tasks"]},
 ]
 
 def get_api_key(engine_id):
@@ -58,6 +67,9 @@ def get_api_key(engine_id):
         "openrouter": os.environ.get("OPENROUTER_API_KEY", ""),
         "openrouter_deepseek": os.environ.get("OPENROUTER_API_KEY", ""),
         "openrouter_llama": os.environ.get("OPENROUTER_API_KEY", ""),
+        "openrouter_qwen": os.environ.get("OPENROUTER_API_KEY", ""),
+        "openrouter_gemma": os.environ.get("OPENROUTER_API_KEY", ""),
+        "openrouter_nemotron": os.environ.get("OPENROUTER_API_KEY", ""),
         "groq": os.environ.get("GROQ_API_KEY", ""),
         "groq_8b": os.environ.get("GROQ_API_KEY", ""),
         "gemini": os.environ.get("GEMINI_API_KEY", ""),
@@ -113,31 +125,27 @@ def get_engine_score(engine, task_type="general"):
     score = 0
     p = perf.get(eid, {})
     calls = p.get("calls", 0)
-    # Weight performance by statistical significance (capped at 10 calls)
     weight = min(calls / 10.0, 1.0) if calls > 0 else 1.0
     if calls > 0:
         success_rate = p.get("success_rate", 100)
         avg_time = p.get("avg_time", 20)
-        # Only add weighted performance; new engines get a flat bonus
         score += success_rate * 10 * weight
         score += max(0, 200 - avg_time * 10) * weight
-    score += 500  # flat new-engine base for ALL engines, weighted performance on top
+    score += 500
     if task_type in engine.get("suitable_for", []):
         score += 300
+    # Speed is PRIMARY factor — dominate so fastest engines always win unless badly degraded
     speed = SPEED_WEIGHTS.get(engine.get("speed_rating", "medium"), 3)
-    score += (5 - speed) * 100
+    score += (6 - speed) * 2000  # very_fast=+10000, fast=+8000, medium=+6000, slow=+4000
     if task_type == "simple" and engine["capability"] == "low":
         score += 200
     if task_type in ("coding", "reasoning", "tools") and engine["capability"] == "high":
         score += 200
     score += (10 - engine["priority"]) * 10
-    # Prefer proven tool-capable engines over sambanova/cerebras/gemini
     if eid in ("openrouter", "openrouter_deepseek", "openrouter_llama", "groq", "groq_8b"):
         score += 600
-    # openrouter_deepseek is fast + tools + free — highest priority
     if eid == "openrouter_deepseek":
         score += 300
-    # groq_8b for simple tasks — very fast
     if task_type == "simple" and eid == "groq_8b":
         score += 600
     return score
@@ -171,25 +179,34 @@ def get_active_engines(task_type=None, needs_tools=None):
             continue
         if not get_api_key(e["id"]):
             continue
-        if task_type:
-            s = get_engine_score(e, task_type)
-        else:
-            s = e["priority"]
+        # Always score by speed + performance, never by raw priority
+        s = get_engine_score(e, task_type or "general")
         scored.append((s, e))
-    scored.sort(key=lambda x: x[0], reverse=True if task_type else False)
+    scored.sort(key=lambda x: x[0], reverse=True)
     return [e for _, e in scored]
 
 def load_engine_status():
+    now = time.time()
     path = os.path.join(AION_DIR, "engine_status.json")
     try:
         if os.path.exists(path):
             with open(path) as f:
                 data = json.load(f)
                 status_map = {e["id"]: e for e in data}
+                changed = False
                 for e in ENGINES:
                     s = status_map.get(e["id"], {})
-                    e["status"] = s.get("status", "active")
-                    e["cooldown_until"] = s.get("cooldown_until", 0)
+                    status = s.get("status", "active")
+                    cooldown = s.get("cooldown_until", 0)
+                    # Auto-expire stale cooldowns
+                    if status != "active" and cooldown <= now:
+                        status = "active"
+                        cooldown = 0
+                        changed = True
+                    e["status"] = status
+                    e["cooldown_until"] = cooldown
+                if changed:
+                    save_engine_status()
     except: pass
 
 def save_engine_status():
@@ -216,6 +233,9 @@ RATE_LIMITS = {
     "openrouter_deepseek": {"max_calls": 20, "window": 60},
     "openrouter": {"max_calls": 20, "window": 60},
     "openrouter_llama": {"max_calls": 20, "window": 60},
+    "openrouter_qwen": {"max_calls": 20, "window": 60},
+    "openrouter_gemma": {"max_calls": 20, "window": 60},
+    "openrouter_nemotron": {"max_calls": 30, "window": 60},
     "groq": {"max_calls": 30, "window": 60},
     "groq_8b": {"max_calls": 30, "window": 60},
     "gemini": {"max_calls": 15, "window": 60},
@@ -313,7 +333,7 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None, tas
     if tools and engine["supports_tools"]:
         body["tools"] = tools
 
-    timeout = 30 if stream else 20
+    timeout = 25 if stream else 15
     if stream:
         resp = requests.post(
             f"{engine['base_url']}/chat/completions",
@@ -328,9 +348,9 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None, tas
     if resp.status_code != 200:
         error_msg = resp.text[:500]
         if "rate limit" in error_msg.lower() or resp.status_code == 429 or "413" in error_msg:
-            mark_engine(engine["id"], "rate_limited", 120)
+            mark_engine(engine["id"], "rate_limited", 180)
         elif "quota" in error_msg.lower() or "billing" in error_msg.lower():
-            mark_engine(engine["id"], "quota_exhausted", 3600)
+            mark_engine(engine["id"], "quota_exhausted", 7200)
         raise Exception(f"API error {resp.status_code}: {error_msg}")
 
     record_call(engine["id"])

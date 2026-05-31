@@ -5,6 +5,17 @@ import LeadsPanel from './components/LeadsPanel'
 
 const API = 'http://127.0.0.1:9790'
 
+function renderMd(text) {
+  if (!text) return ''
+  let h = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>')
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>')
+  h = h.replace(/\n/g, '<br>')
+  return h
+}
+
 function fmtTs(ts) {
   try {
     const d = new Date(ts)
@@ -85,7 +96,6 @@ function App() {
   const [collabEvents, setCollabEvents] = useState([])
   const [agentFiles, setAgentFiles] = useState({})
   const [activeAgents, setActiveAgents] = useState({})
-  const [pendingApprovals, setPendingApprovals] = useState([])
   const [readEvents, setReadEvents] = useState([])
   const [taskProgress, setTaskProgress] = useState(null)
   const [currentProject, setCurrentProject] = useState('default')
@@ -120,6 +130,18 @@ function App() {
   const [liveEvents, setLiveEvents] = useState([])
   const liveRef = useRef([])
   useEffect(() => { liveRef.current = liveEvents }, [liveEvents])
+
+  // ── New state for engine strip, health, agent sidebar, notifications ──
+  const [allEngines, setAllEngines] = useState([])
+  const [healthOk, setHealthOk] = useState(false)
+  const [showAgentSidebar, setShowAgentSidebar] = useState(false)
+  const [toasts, setToasts] = useState([])
+  const [selectedAgentDetail, setSelectedAgentDetail] = useState(null)
+  const toastIdRef = useRef(0)
+  const [autoMode, setAutoMode] = useState(false)
+  const autoModeRef = useRef(false)
+  const autoTimerRef = useRef(null)
+  const autoPromptRef = useRef('')
 
   const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
@@ -228,14 +250,6 @@ function App() {
   }, [activeAgent, activeSession, selectedEngine])
   const sendMessageRef = useRef(sendMessageFn)
 
-  const approveRequest = useCallback(async (req, decision) => {
-    const rid = req.request_id || req.id
-    try {
-      if (decision === 'approve') await fetch(`${API}/api/approvals/${rid}/approve`, { method: 'POST' })
-      else await fetch(`${API}/api/approvals/${rid}/reject`, { method: 'POST' })
-    } catch (_) {}
-    setPendingApprovals(prev => prev.filter(r => (r.id !== rid && r.request_id !== rid)))
-  }, [])
   sendMessageRef.current = sendMessageFn
 
   const wsReconnectTimer = useRef(null)
@@ -287,9 +301,17 @@ function App() {
             return [...prev,{role:'assistant',content:data.content,_aid:aid,_sid:sid,ts:data.ts||new Date().toISOString()}]
           })
           break
-        case 'tool_start': setMessages(prev=>[...prev,{role:'tool_use',name:data.name,args:data.args,_aid:aid,_sid:sid}]); setCurrentTool(data.name); break
-        case 'tool_result': setMessages(prev=>[...prev,{role:'tool_result',name:data.name,result:data.result,_aid:aid,_sid:sid}]); setCurrentTool(null); break
-        case 'status': setCurrentEngine(data.engine); break
+        case 'tool_start':
+          setMessages(prev=>[...prev,{role:'tool_use',name:data.name,args:data.args,_aid:aid,_sid:sid}]); setCurrentTool(data.name)
+          setLiveEvents(prev => [...prev, {_liveType:'tool_exec', content:`🔧 ${data.name}`, ts:data.ts||new Date().toISOString(), agent_id:aid}].slice(-100))
+          break
+        case 'tool_result':
+          setMessages(prev=>[...prev,{role:'tool_result',name:data.name,result:data.result,_aid:aid,_sid:sid}]); setCurrentTool(null)
+          setLiveEvents(prev => [...prev, {_liveType:'tool_exec', content:`✅ ${data.name} done`, ts:data.ts||new Date().toISOString(), agent_id:aid}].slice(-100))
+          break
+        case 'status': setCurrentEngine(data.engine);
+          setLiveEvents(prev => [...prev, {_liveType:'engine_call', content:`⚡ ${data.engine}`, ts:new Date().toISOString(), agent_id:aid, engine_id:data.engine}].slice(-100))
+          break
         case 'done':
           setTyping(false); setCurrentEngine(''); setCurrentTool(null)
           setAgentHighlights(prev=>({...prev,[aid]:Date.now()}))
@@ -340,15 +362,63 @@ function App() {
     fetch(`${API}/api/collab/reads`).then(r=>r.json()).then(d => {
       if (d.reads?.length) setReadEvents(d.reads)
     }).catch(()=>{})
-    fetch(`${API}/api/approvals/pending`).then(r=>r.json()).then(d => {
-      if (d.approvals?.length) setPendingApprovals(d.approvals)
-    }).catch(()=>{})
     fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d => {
       if (d.stats) setAgentPerf(d.stats)
     }).catch(()=>{})
     fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d => {
       if (d.entries?.length) setCommEvents(d.entries)
     }).catch(()=>{})
+  }, [])
+
+  // Auto-mode: when agent finishes, send autonomous continuation prompt
+  useEffect(() => {
+    if (!autoMode) return
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg?.role === 'assistant' && lastMsg._aid === activeAgent && !typing && !hasActiveAgents) {
+      const timer = setTimeout(() => {
+        if (autoModeRef.current && !typing) {
+          const next = autoPromptRef.current
+            ? `αυτόνομη συνέχεια — συνέχισε ό,τι ανέλαβες. Αν χρειάζεσαι βοήθεια από άλλους agents, επικοινώνησε απευθείας μαζί τους. Στόχος: ολοκλήρωσε την εργασία. Αρχική εντολή: ${autoPromptRef.current}`
+            : 'συνέχισε αυτόνομα: συνέχισε την εργασία σου. Αν χρειαστεί, μίλησε με άλλους agents για να ολοκληρωθεί το αποτέλεσμα.'
+          sendMessageRef.current(next)
+        }
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [messages, autoMode, activeAgent, typing, hasActiveAgents])
+
+  // Cleanup auto timer on unmount
+  useEffect(() => { return () => { if (autoTimerRef.current) clearTimeout(autoTimerRef.current) } }, [])
+
+  // Toast helper
+  const addToast = useCallback((msg, type='info') => {
+    const id = ++toastIdRef.current
+    setToasts(prev => [...prev, {id, msg, type, _ts: Date.now()}])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
+  }, [])
+
+  // Keyboard shortcut: L → toggle Live sidebar
+  useEffect(() => {
+    function handleKey(e) {
+      if (e.key === 'l' || e.key === 'L') {
+        if (!e.target.closest('input,textarea,select')) setShowAgentSidebar(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [])
+
+  // Engine + Health polling
+  useEffect(() => {
+    const poll = setInterval(() => {
+      fetch(`${API}/api/health`).then(r => r.json()).then(d => {
+        setHealthOk(d.status === 'ok')
+      }).catch(() => setHealthOk(false))
+      fetch(`${API}/api/engines`).then(r => r.json()).then(d => {
+        setAllEngines(d.engines || [])
+      }).catch(() => {})
+    }, 8000)
+    return () => clearInterval(poll)
   }, [])
 
   // Heartbeat polling — flag agents with no recent events
@@ -371,6 +441,11 @@ function App() {
           const data = JSON.parse(e.data)
           if (data.type === 'agent_status') {
             setActiveAgents(prev => ({...prev, [data.agent_id]: data.state || (data.active ? 'writing' : 'idle')}))
+            setLiveEvents(prev => [...prev, {_liveType: 'api_request', content: `⚡ ${data.agent_id} ${data.state||(data.active?'active':'idle')}`, ts: data.ts || new Date().toISOString(), agent_id: data.agent_id}].slice(-100))
+          } else if (data.type === 'engine_call') {
+            setLiveEvents(prev => [...prev, {_liveType: 'engine_call', content: `${data.engine_id} → ${data.status||'calling'}${data.duration_s?` (${data.duration_s}s)`:''}`, ts: data.ts || new Date().toISOString(), agent_id: data.agent_id, engine_id: data.engine_id}].slice(-100))
+          } else if (data.type === 'tool_exec') {
+            setLiveEvents(prev => [...prev, {_liveType: 'tool_exec', content: `${data.tool} ${data.status||'run'} ${data.duration_s?`(${data.duration_s}s)`:''}`, ts: data.ts || new Date().toISOString(), agent_id: data.agent_id}].slice(-100))
           } else if (data.type === 'agent_thinking') {
             setThinkingEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-50))
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
@@ -380,15 +455,20 @@ function App() {
             }
             if (data.status === 'complete') {
               setLiveEvents(prev => [...prev, {...data, _liveType: 'complete'}].slice(-20))
+              const a = agents.find(x => x.id === data.agent_id)
+              addToast(`✅ ${a?.icon||'🤖'} ${a?.name||data.agent_id} completed`, 'success')
             }
             if (data.status === 'error') {
               setLiveEvents(prev => [...prev, {...data, _liveType: 'error'}].slice(-20))
+              const a = agents.find(x => x.id === data.agent_id)
+              addToast(`❌ ${a?.icon||'🤖'} ${a?.name||data.agent_id} error`, 'error')
             }
             if (data.status === 'started' && data.agent_id !== activeAgentRef.current) {
               const a = agents.find(x => x.id === data.agent_id)
               setMessages(prev => {
                 const exists = prev.some(m => m._aid === data.agent_id && m.role === 'system' && m.content?.includes('ξεκινά'))
                 if (exists) return prev
+                addToast(`⏳ ${a?.icon||''} ${a?.name||data.agent_id} started`, 'info')
                 return [...prev, {role:'system', content:`⏳ ${a?.icon||''} ${a?.name||data.agent_id} ξεκινά εργασία... (εκτίμ. ${data.estimated_seconds||'?'}s)`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString(), _sysType: 'thinking'}]
               })
             }
@@ -398,6 +478,17 @@ function App() {
             }
           } else if (data.type === 'agent_chat') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
+            // Log agent response to backend log
+            if (data.exchange) {
+              const lastExchange = data.exchange[data.exchange.length - 1]
+              const agent = agents.find(x => x.id === data.agent_id)
+              setLiveEvents(prev => [...prev, {
+                _liveType: 'complete',
+                content: `${agent?.icon||'🤖'} ${data.agent_id} → ${lastExchange?.content?.slice(0,120)||'response'}`,
+                ts: data.ts || new Date().toISOString(),
+                agent_id: data.agent_id
+              }].slice(-100))
+            }
             if ((data.agent_id === activeAgentRef.current || activeAgentRef.current === 'ceo') && data.exchange) {
               setMessages(prev => {
                 const ceoSession = activeSession?.sessionId || 'default'
@@ -415,11 +506,6 @@ function App() {
                 return [...prev, ...newMsgs]
               })
             }
-          } else if (data.type === 'approval_request') {
-            setPendingApprovals(prev => [...prev.filter(r => r.id !== data.request_id && r.request_id !== data.request_id), data])
-          } else if (data.type === 'approval_result') {
-            setPendingApprovals(prev => prev.filter(r => r.id !== data.request_id && r.request_id !== data.request_id))
-            setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
           } else if (data.type === 'task_progress') {
             setTaskProgress(data)
             if (data.status === 'complete') setTimeout(() => setTaskProgress(null), 8000)
@@ -428,7 +514,7 @@ function App() {
           } else if (data.type === 'agent_comm') {
             setCommEvents(prev => [...prev, data].slice(-200))
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
-            setLiveEvents(prev => [...prev, {...data, _liveType: 'comm'}].slice(-20))
+            setLiveEvents(prev => [...prev, {...data, _liveType: 'comm', ts: data.ts||new Date().toISOString()}].slice(-100))
             setLastSeenPerAgent(prev => ({...prev, [data.from]: 0, [data.to]: 0}))
           } else if (data.type === 'agent_tool_step') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
@@ -566,16 +652,21 @@ img{max-width:100%;height:auto}`
 
   const exportExcel = useCallback(() => {
     const agent = currentAgent?.name||'Agent'
-    const date = new Date().toLocaleDateString('el-GR')
+    const date = new Date().toISOString().slice(0,10)
+    function stripToolCalls(text) {
+      return (text||'').replace(/<longcat_tool_call>[\s\S]*?<\/longcat_tool_call>/g, '').replace(/<[^>]+>/g, '').trim()
+    }
     const rows = displayMessages.map((m) => {
       const roleLabel = m.role==='user'?'User':m.role==='assistant'?'Assistant':m.role==='error'?'Error':m.role==='tool_use'?`Tool: ${m.name}`:m.role==='tool_result'?`Result: ${m.name}`:m.role
-      const content = (m.content||JSON.stringify(m.args||'')||m.result||'').replace(/"/g,'""')
-      return `"${roleLabel}","${(m.ts||'').replace(/"/g,'""')}","${content.replace(/\n/g,'↵ ')}"`
+      const raw = m.content||JSON.stringify(m.args||'')||m.result||''
+      const clean = stripToolCalls(raw).replace(/"/g,'""')
+      const ts = m.ts ? new Date(m.ts).toISOString() : ''
+      return `"${agent}","${date}","${roleLabel}","${ts}","${clean}"`
     }).join('\n')
-    const csv = `Agent,Date,Role,Timestamp,Message\n"${agent}","${date}",,,,,,,,\n${rows}`
-    const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8'})
+    const csv = `Agent,Date,Role,Timestamp,Message\n${rows}`
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'})
     const a = document.createElement('a'); a.href=URL.createObjectURL(blob)
-    a.download=`${agent}_${date.replace(/\//g,'-')}.csv`; a.click()
+    a.download=`${agent}_${date}.csv`; a.click()
     URL.revokeObjectURL(a.href)
   }, [displayMessages, currentAgent])
 
@@ -780,8 +871,10 @@ img{max-width:100%;height:auto}`
       {/* TOP BAR */}
       <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
         <span className="text-accent font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success animate-pulse':'bg-red-500'}`} />
-        <span className="text-[10px] text-gray-600 shrink-0">{currentProject !== 'default' ? currentProject.replace(/_/g, ' ') : ''}</span>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${healthOk && connected ? 'bg-success animate-pulse' : 'bg-red-500'}`} title={healthOk ? 'backend online' : 'backend offline'} />
+        <span className="text-[10px] text-gray-500 shrink-0 font-mono">{allEngines.length} engines</span>
+        <span className="text-[10px] text-gray-600 shrink-0">· {agents.length} agents</span>
+        <span className="text-[10px] text-gray-600 shrink-0">· {currentProject !== 'default' ? currentProject.replace(/_/g, ' ') : ''}</span>
         <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
         {agents.map(a => {
           const isWorking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
@@ -794,6 +887,8 @@ img{max-width:100%;height:auto}`
         })}
         <div className="h-4 w-px bg-app-elevated mx-2 shrink-0" />
         <div className="ml-auto flex items-center gap-1 shrink-0">
+          <button onClick={()=>setShowAgentSidebar(prev => !prev)}
+            className={`text-[10px] px-2 py-1 rounded transition-colors ${showAgentSidebar ? 'bg-accent/20 text-accent' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📡 Live</button>
           <button onClick={()=>setShowCollab(!showCollab)} className={`text-[10px] px-2 py-1 rounded transition-colors ${showCollab ? 'bg-accent/20 text-accent' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}>📋 Team</button>
           <button onClick={()=>setSidebarPanel('leads')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📊 CRM</button>
           <button onClick={()=>setSidebarPanel('files')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">📁 Files</button>
@@ -805,6 +900,22 @@ img{max-width:100%;height:auto}`
         </div>
       </div>
 
+      {/* ENGINE STATUS STRIP */}
+      <div className="flex items-center gap-1.5 px-4 py-1 bg-app-elevated/60 border-b border-app-elevated shrink-0 overflow-x-auto min-h-[28px]">
+        {allEngines.map(e => {
+          const status = e.status || 'unknown'
+          const statusColor = status === 'active' ? 'bg-success' : status === 'degraded' ? 'bg-warning' : status === 'rate_limited' ? 'bg-info' : status === 'quota_exhausted' || status === 'needs_key' ? 'bg-error' : status === 'timeout' ? 'bg-warning' : 'bg-text-dim'
+          return (
+            <span key={e.id} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-app-elevated/80 border border-app-elevated text-[9px] whitespace-nowrap" title={`${e.name} · ${e.model} · priority ${e.priority} · ${e.capability} · ${e.speed_rating}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${statusColor}`} />
+              <span className="text-gray-400 max-w-[60px] truncate">{e.id}</span>
+              <span className="text-gray-600">{status}</span>
+            </span>
+          )
+        })}
+        <span className="text-gray-700 text-[9px] ml-auto shrink-0 whitespace-nowrap">{new Date().toLocaleTimeString('el-GR', {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+      </div>
+
       <div className="flex flex-1 min-h-0">
         {/* LEFT SIDEBAR */}
         <div className="w-56 bg-app-surface border-r border-app-elevated flex flex-col shrink-0">
@@ -812,9 +923,9 @@ img{max-width:100%;height:auto}`
             <h1 className="text-sm font-bold text-accent">AIONCLAW</h1>
           </div>
           {sidebarContent ? (
-            <div className="flex-1 overflow-hidden">{sidebarContent}</div>
+            <div className="flex-1 overflow-y-auto min-h-0">{sidebarContent}</div>
           ) : (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col min-h-0">
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {Object.entries(CATEGORIES).map(([cat, agentIds]) => {
                   const catAgents = agents.filter(a => agentIds.includes(a.id))
@@ -856,15 +967,14 @@ img{max-width:100%;height:auto}`
                     </div>
                   )
                 })}
-              </div>
-              <div className="px-2 py-1 border-t border-app-elevated">
-                <button onClick={addSession}
-                  className="w-full text-xs text-text-secondary hover:text-accent px-3 py-2 rounded-lg border border-dashed border-app-elevated hover:border-accent/40 transition-colors flex items-center gap-2">
-                  <span className="text-sm leading-none">+</span><span>New Chat</span>
-                </button>
-              </div>
-              {/* Session tabs */}
-              <div className="max-h-[200px] overflow-y-auto px-2 pb-2 space-y-0.5">
+
+                {/* Session tabs — inline with agents */}
+                <div className="border-t border-app-elevated pt-2 mt-2">
+                  <button onClick={addSession}
+                    className="w-full text-xs text-text-secondary hover:text-accent px-3 py-2 rounded-lg border border-dashed border-app-elevated hover:border-accent/40 transition-colors flex items-center gap-2">
+                    <span className="text-sm leading-none">+</span><span>New Chat</span>
+                  </button>
+                </div>
                 {agentSessions.map(s => {
                   const isActive = activeSession?.sessionId === s.id
                   const msgCount = messages.filter(m => m._aid===activeAgent && m._sid===s.id).length
@@ -879,36 +989,52 @@ img{max-width:100%;height:auto}`
                     </button>
                   )
                 })}
-              </div>
 
-              {/* Working Team — live delegation status */}
-              {thinkingEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing') && (
-                <div className="border-t border-amber-500/20 mx-2 pt-1.5 pb-1">
-                  <div className="text-[9px] text-amber-400/70 uppercase tracking-wider font-medium px-1 mb-1">⚡ Working Team</div>
-                  <div className="space-y-0.5 px-1">
-                    {agents.filter(a => thinkingEvents.some(e => e.agent_id === a.id && (e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing'))).map(a => {
-                      const evs = thinkingEvents.filter(e => e.agent_id === a.id)
-                      const last = evs[evs.length - 1]
-                      const isThinking = last?.status === 'thinking' || last?.status === 'started'
-                      const duration = last?.started_at ? Math.floor((Date.now() - new Date(last.started_at).getTime()) / 1000) : 0
-                      return (
-                        <div key={a.id} className="flex items-center gap-1.5 py-1 px-1.5 rounded bg-amber-500/5 border border-amber-500/10 text-[10px]">
-                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse shrink-0" />
-                          <span className="shrink-0">{a.icon}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1">
-                              <span className="text-amber-300 font-medium truncate">{a.name}</span>
-                              <span className="text-amber-500/60 ml-auto">{duration}s</span>
+                {/* Working Team — live delegation status with agent responses */}
+                {(thinkingEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing') || commEvents.some(e => {
+                  const age = Date.now() - new Date(e.ts||Date.now()).getTime()
+                  return age < 60000
+                })) && (
+                  <div className="border-t border-amber-500/20 pt-2 mt-1">
+                    <div className="text-[9px] text-amber-400/70 uppercase tracking-wider font-medium px-1 mb-1">⚡ Working Team</div>
+                    <div className="space-y-0.5 px-1">
+                      {(() => {
+                        const now = Date.now()
+                        const activeIds = new Set()
+                        thinkingEvents.filter(e => (e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')).forEach(e => activeIds.add(e.agent_id))
+                        commEvents.filter(e => now - new Date(e.ts||now).getTime() < 60000).forEach(e => { activeIds.add(e.from); activeIds.add(e.to) })
+                        collabEvents.filter(e => (e.type === 'agent_chat' || e.type === 'agent_comm') && now - (e._ts||now) < 60000).forEach(e => {
+                          if (e.from) activeIds.add(e.from); if (e.to) activeIds.add(e.to); if (e.agent_id) activeIds.add(e.agent_id)
+                        })
+                        return agents.filter(a => activeIds.has(a.id))
+                      })().map(a => {
+                        const evs = thinkingEvents.filter(e => e.agent_id === a.id)
+                        const last = evs[evs.length - 1]
+                        const isWorking = evs.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
+                        const recentComm = commEvents.filter(e => (e.from === a.id || e.to === a.id) && Date.now() - new Date(e.ts||now).getTime() < 60000)
+                        const lastComm = recentComm[recentComm.length - 1]
+                        const duration = last?.started_at ? Math.floor((Date.now() - new Date(last.started_at).getTime()) / 1000) : 0
+                        const dotStatus = isWorking ? 'bg-amber-400 animate-pulse' : 'bg-green-500'
+                        return (
+                          <div key={a.id} className="flex items-center gap-1.5 py-1 px-1.5 rounded bg-amber-500/5 border border-amber-500/10 text-[10px]">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotStatus}`} />
+                            <span className="shrink-0">{a.icon}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1">
+                                <span className="text-amber-300 font-medium truncate">{a.name}</span>
+                                <span className="text-amber-500/60 ml-auto">{duration > 0 ? `${duration}s` : ''}</span>
+                              </div>
+                              {isWorking && last?.thought && <div className="text-[8px] text-amber-400/60 truncate">{last.thought.slice(0,60)}</div>}
+                              {!isWorking && lastComm && <div className="text-[8px] text-green-400/60 truncate">→ {lastComm.action}</div>}
+                              {!isWorking && !lastComm && last?.status === 'complete' && <div className="text-[8px] text-green-400/60">✅ completed</div>}
                             </div>
-                            {isThinking && last?.thought && <div className="text-[8px] text-amber-400/60 truncate">{last.thought.slice(0,60)}</div>}
                           </div>
-                        </div>
-                      )
-                    })}
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
-
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -932,6 +1058,10 @@ img{max-width:100%;height:auto}`
               {displayMessages.length>0&&(
                 <>
                   <button onClick={exportWord} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Word">📄 Word</button>
+                  <button onClick={() => {
+                    const url = `${API}/api/export/doc?session_id=${activeSession?.sessionId||'default'}&agent_id=${activeAgent}`
+                    navigator.clipboard.writeText(url).then(() => addToast('📋 Link copied', 'success'))
+                  }} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px]" title="Copy shareable link to Word export">🔗</button>
                   <button onClick={exportExcel} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Excel">📊 Excel</button>
                 </>
               )}
@@ -974,12 +1104,16 @@ img{max-width:100%;height:auto}`
                   </>}
                   {msg.role==='tool_result'&&<>
                     <div className="text-text-dim mb-1">← {msg.name}</div>
-                    <div className="whitespace-pre-wrap">{msg.result}</div>
+                    {/<\/?[a-zA-Z][^>]*>/.test(msg.result||'')
+                      ? <div className="render-html" dangerouslySetInnerHTML={{__html: msg.result}} />
+                      : <div className="leading-relaxed" dangerouslySetInnerHTML={{__html: renderMd(msg.result||'')}} />}
                   </>}
                   {(msg.role==='assistant'||msg.role==='user')&&(
                     msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
                       ? <div className="render-html" dangerouslySetInnerHTML={{__html: msg.content}} />
-                      : <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                      : msg.role==='assistant'
+                        ? <div className="leading-relaxed" dangerouslySetInnerHTML={{__html: renderMd(msg.content)}} />
+                        : <div className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</div>
                   )}
                   {msg._grouped && msg.tools?.length > 0 && (
                     <div>
@@ -1010,7 +1144,7 @@ img{max-width:100%;height:auto}`
                       )}
                     </div>
                   )}
-                  {msg.role==='error'&&<div className="whitespace-pre-wrap text-sm">{msg.content}</div>}
+                  {msg.role==='error'&&<div className="whitespace-pre-wrap break-words text-sm">{msg.content}</div>}
                   {msg.ts && (msg.role==='assistant'||msg.role==='user')&&(
                     <div className="msg-time">{fmtTs(msg.ts)}</div>
                   )}
@@ -1088,31 +1222,20 @@ img{max-width:100%;height:auto}`
           </div>
 
 
-          {pendingApprovals.length > 0 && (
-            <div className="border-t border-warning/30 bg-warning/5 p-3">
-              {pendingApprovals.map(req => (
-                <div key={req.id || req.request_id} className="flex items-center gap-3 max-w-4xl mx-auto text-sm">
-                  <span className="text-warning font-medium shrink-0">⏳ Αίτημα Έγκρισης</span>
-                  <span className="text-text-secondary truncate flex-1">{req.summary || req.details?.slice(0,100)}</span>
-                  <button onClick={() => approveRequest(req, 'approve')}
-                    className="bg-success hover:bg-success/80 text-white rounded-full px-3 py-1 text-xs font-medium transition-colors shrink-0">✓ Έγκριση</button>
-                  <button onClick={() => approveRequest(req, 'reject')}
-                    className="bg-error/30 hover:bg-error/50 text-white rounded-full px-3 py-1 text-xs font-medium transition-colors shrink-0">✗ Απόρριψη</button>
-                </div>
-              ))}
-            </div>
-          )}
 
           <div className="border-t border-app-elevated/60 px-4 py-3 bg-app-surface/30">
-            <div className="flex gap-2 max-w-4xl mx-auto items-center">
-              <div className="flex-1 flex gap-2 items-center bg-app-elevated/80 border border-app-elevated rounded-full px-4 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px_var(--accent-glow)] transition-all">
-                <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown}
+            <div className="flex gap-2 max-w-4xl mx-auto items-end">
+              <div className="flex-1 flex gap-2 items-end bg-app-elevated/80 border border-app-elevated rounded-2xl px-4 py-2 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px_var(--accent-glow)] transition-all">
+                <textarea value={input} onChange={e=>{setInput(e.target.value);e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,200)+'px'}}
+                  onKeyDown={handleKeyDown}
                   placeholder={connected?`Μήνυμα στον ${currentAgent?.name}...`:'Connecting...'}
                   disabled={!connected}
-                  className="flex-1 py-2.5 bg-transparent text-sm text-text-primary placeholder-text-dim/50 focus:outline-none disabled:opacity-40"
+                  rows={1}
+                  className="flex-1 resize-none bg-transparent text-sm text-text-primary placeholder-text-dim/50 focus:outline-none disabled:opacity-40 leading-relaxed max-h-[200px]"
+                  style={{minHeight:'24px'}}
                 />
                 <button onClick={() => fileInputRef.current?.click()}
-                  className="text-text-dim/60 hover:text-accent transition-colors text-sm" title="Upload file">📎</button>
+                  className="text-text-dim/60 hover:text-accent transition-colors text-sm shrink-0" title="Upload file">📎</button>
                 <input ref={fileInputRef} type="file" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0]; if (!file) return
                   const form = new FormData(); form.append('file', file)
@@ -1130,8 +1253,25 @@ img{max-width:100%;height:auto}`
                 }} />
               </div>
               {typing && (
-                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 py-2 font-medium transition-all flex items-center gap-1.5 text-sm self-center border border-error/20"><span>■</span> Stop</button>
+                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 py-2 font-medium transition-all flex items-center gap-1.5 text-sm border border-error/20 shrink-0"><span>■</span></button>
               )}
+              <button onClick={() => {
+                if (autoMode) {
+                  setAutoMode(false); autoModeRef.current = false
+                  if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null }
+                  addToast('⏹ Auto mode stopped', 'info')
+                } else {
+                  const prompt = input.trim() || 'συνέχισε'
+                  autoPromptRef.current = prompt
+                  setAutoMode(true); autoModeRef.current = true
+                  addToast('▶ Auto mode: ' + prompt.slice(0,40), 'success')
+                  sendMessageFn(prompt)
+                }
+              }}
+                className={`text-[10px] px-2.5 py-2 rounded-full font-bold transition-all shrink-0 ${autoMode ? 'bg-green-500/20 text-green-400 border border-green-500/40 animate-pulse' : 'bg-app-elevated text-gray-400 hover:text-gray-300 border border-app-elevated'}`}
+                title={autoMode ? 'Stop auto mode' : 'Αυτόνομη συνέχεια: ο agent συνεχίζει μέχρι να ολοκληρωθεί'}>
+                {autoMode ? '■' : '♾️'}
+              </button>
               <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
                 className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-5 py-2.5 font-medium transition-all disabled:text-text-dim shrink-0 text-sm">Send →</button>
             </div>
@@ -1180,6 +1320,9 @@ img{max-width:100%;height:auto}`
                 </button>
                 <button onClick={()=>setDrawerTab('log')} className={`drawer-tab ${drawerTab==='log'?'active':''}`}>
                   📋 Log
+                </button>
+                <button onClick={()=>setDrawerTab('comm')} className={`drawer-tab ${drawerTab==='comm'?'active':''}`}>
+                  💬 Comm
                 </button>
                 <button onClick={()=>setDrawerTab('projects')} className={`drawer-tab ${drawerTab==='projects'?'active':''}`}>
                   📁 Projects
@@ -1230,6 +1373,40 @@ img{max-width:100%;height:auto}`
                 </div>
               )}
 
+              {/* Tab: Comm (Agent-to-Agent) */}
+              {drawerTab === 'comm' && (
+                <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+                  {commEvents.length === 0 ? (
+                    <div className="text-center py-8 text-text-dim text-[10px]">No agent communications yet. Send a task to see interactions.</div>
+                  ) : (
+                    [...commEvents].reverse().slice(0, 100).map((ev, i) => {
+                      const fromAg = agents.find(x => x.id === ev.from)
+                      const toAg = agents.find(x => x.id === ev.to)
+                      const isWorking = thinkingEvents.some(e => e.agent_id === ev.from && (e.status==='thinking'||e.status==='started'))
+                      return (
+                        <button key={ev.id || i}
+                          onClick={() => navigateToAgent(ev.to === 'ceo' ? ev.from : ev.to, 'default')}
+                          className={`w-full text-left rounded-lg p-2 border transition-colors hover:bg-app-elevated/60 ${isWorking ? 'border-yellow-500/20 bg-yellow-500/5' : 'border-app-elevated'}`}>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            {isWorking && <span className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse shrink-0"/>}
+                            <span className="text-sm">{fromAg?.icon||'🤖'}</span>
+                            <span className="text-[10px] font-medium text-text-secondary">{fromAg?.name||ev.from}</span>
+                            <span className="text-text-dim text-[8px]">→</span>
+                            <span className="text-sm">{toAg?.icon||'🤖'}</span>
+                            <span className="text-[10px] font-medium text-text-secondary">{toAg?.name||ev.to}</span>
+                            <span className={`ml-auto text-[9px] ${ev.action === 'delegate' ? 'text-warning' : ev.action === 'result' ? 'text-success' : 'text-text-dim'}`}>
+                              {ev.action === 'delegate' ? '📋' : ev.action === 'result' ? '✅' : ev.action === 'reply' ? '💬' : '⚡'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-text-dim line-clamp-2 ml-5">{ev.content || ''}</div>
+                          <div className="text-[8px] text-text-dim/50 mt-0.5 ml-5">{fmtTime(ev.ts)}</div>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              )}
+
               {/* Tab: Projects */}
               {drawerTab === 'projects' && (
                 <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
@@ -1255,13 +1432,20 @@ img{max-width:100%;height:auto}`
           </>
         )}
       </div>
-      {/* BOTTOM LIVE CONSOLE */}
+      {/* BOTTOM BACKEND LOG CONSOLE */}
       <div className="bg-app-surface border-t border-app-elevated shrink-0 overflow-hidden" onClick={()=>{setShowConsole(true)}}>
         {/* Status row */}
         <div className="flex items-center gap-2 px-3 py-1 text-[10px] overflow-x-auto border-b border-app-elevated/40">
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected?'bg-success':'bg-error'}`} />
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${healthOk && connected?'bg-success':'bg-error'}`} title={healthOk?'backend online':'offline'} />
           <span className="text-gray-600 shrink-0">{wsStatus}</span>
-          <div className="h-3 w-px bg-gray-800 shrink-0" />
+          <span className="text-gray-700 shrink-0">·</span>
+          {allEngines.filter(e => e.status === 'active').slice(0, 3).map(e => (
+            <span key={e.id} className="flex items-center gap-1 shrink-0" title={e.name}>
+              <span className="w-1 h-1 bg-success rounded-full" />
+              <span className="text-gray-500 text-[8px]">{e.id}</span>
+            </span>
+          ))}
+          <span className="text-gray-700 shrink-0">·</span>
           {agents.slice(0, 8).map(a => {
             const isWorking = thinkingEvents.some(e => e.agent_id === a.id && (e.status==='thinking'||e.status==='started'||e.status==='synthesizing'))
             const secsSinceEvent = lastSeenPerAgent[a.id]
@@ -1279,33 +1463,40 @@ img{max-width:100%;height:auto}`
             )
           })}
           <span className="text-gray-600 shrink-0">+{Math.max(0, agents.length - 8)}</span>
+          <span className="text-gray-700 shrink-0 text-[8px]">{liveEvents.length} events</span>
           <div className="ml-auto flex items-center gap-1 shrink-0">
             <span className="text-gray-600 cursor-pointer hover:text-gray-300 text-[9px]">▴ expand</span>
           </div>
         </div>
-        {/* Live feed */}
+        {/* Live backend log feed */}
         <div className="h-20 overflow-y-auto px-3 py-1 space-y-0.5 font-mono text-[9px]">
           {liveEvents.length === 0 ? (
-            <div className="text-gray-700 italic py-2">Waiting for agent activity...</div>
+            <div className="text-gray-700 italic py-2">Waiting for backend activity...</div>
           ) : (
-            [...liveEvents].reverse().slice(0, 6).map((ev, i) => {
+            [...liveEvents].reverse().slice(0, 8).map((ev, i) => {
               const ts = ev.ts ? fmtTime(ev.ts) : ''
               let prefix = '', color = 'text-gray-500'
-              if (ev._liveType === 'thinking') { prefix = '⏳'; color = 'text-amber-400' }
-              else if (ev._liveType === 'complete') { prefix = '✅'; color = 'text-green-400' }
-              else if (ev._liveType === 'error') { prefix = '❌'; color = 'text-red-400' }
-              else if (ev._liveType === 'comm') {
-                const fromAg = agents.find(x => x.id === ev.from)
-                const toAg = agents.find(x => x.id === ev.to)
-                prefix = `${fromAg?.icon||'🤖'} ${ev.from} → ${toAg?.icon||'🤖'} ${ev.to}`
-                color = ev.action === 'delegate' ? 'text-amber-400' : ev.action === 'result' || ev.action === 'reply' ? 'text-green-400' : 'text-gray-400'
+              switch (ev._liveType) {
+                case 'engine_call': prefix = '⚡'; color = 'text-blue-400'; break
+                case 'tool_exec': prefix = '🔧'; color = 'text-amber-400'; break
+                case 'api_request': prefix = '📡'; color = 'text-purple-400'; break
+                case 'thinking': prefix = '⏳'; color = 'text-amber-400'; break
+                case 'complete': prefix = '✅'; color = 'text-green-400'; break
+                case 'error': prefix = '❌'; color = 'text-red-400'; break
+                case 'comm':
+                  const fa = agents.find(x => x.id === ev.from)
+                  const ta = agents.find(x => x.id === ev.to)
+                  prefix = `${fa?.icon||'🤖'} ${ev.from} → ${ta?.icon||'🤖'} ${ev.to}`
+                  color = ev.action === 'delegate' ? 'text-amber-400' : ev.action === 'result' ? 'text-green-400' : 'text-gray-400'
+                  break
+                case 'progress': prefix = '🔧'; color = 'text-accent'; break
+                default: prefix = '·'; break
               }
-              else if (ev._liveType === 'progress') { prefix = '🔧'; color = 'text-accent' }
-              const content = ev.content || ev.thought || ev.message || ev.tool || ''
-              const maxLen = content.length > 80 ? content.slice(0,80)+'…' : content
+              const content = ev.content || ev.thought || ev.message || ev.tool || ev.text || ''
+              const maxLen = content.length > 90 ? content.slice(0,90)+'…' : content
               return (
                 <div key={i} className={`flex gap-2 ${color}`}>
-                  <span className="text-gray-600 shrink-0 w-14">{ts}</span>
+                  <span className="text-gray-700 shrink-0 w-14">{ts}</span>
                   <span className="shrink-0">{prefix}</span>
                   <span className="truncate">{maxLen}</span>
                 </div>
@@ -1315,6 +1506,210 @@ img{max-width:100%;height:auto}`
         </div>
       </div>
       {knowledgePanel}
+
+      {/* RIGHT AGENT ACTIVITY SIDEBAR */}
+      {showAgentSidebar && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={()=>setShowAgentSidebar(false)} />
+          <div className="fixed right-0 top-0 bottom-0 w-72 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
+            <div className="px-3 py-2.5 border-b border-app-elevated flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-text-secondary uppercase font-medium tracking-wider text-[10px]">Live Agents</span>
+                {thinkingEvents.some(e => e.status !== 'complete' && e.status !== 'error') && (
+                  <span className="flex items-center gap-1 text-accent/70 text-[9px]">
+                    <span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"/>live
+                  </span>
+                )}
+              </div>
+              <button onClick={()=>setShowAgentSidebar(false)} className="text-text-dim hover:text-text-primary transition-colors text-xs">✕</button>
+            </div>
+
+            {/* Agents sorted by most recent activity */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {agents.length === 0 ? (
+                <div className="text-center py-8 text-text-dim text-[10px]">No agents loaded</div>
+              ) : (
+                [...agents]
+                  .sort((a, b) => {
+                    const aLast = Math.max(...thinkingEvents.filter(e => e.agent_id === a.id).map(e => new Date(e.ts).getTime() || 0), 0)
+                    const bLast = Math.max(...thinkingEvents.filter(e => e.agent_id === b.id).map(e => new Date(e.ts).getTime() || 0), 0)
+                    return bLast - aLast
+                  })
+                  .map(a => {
+                    const agentEvents = thinkingEvents.filter(e => e.agent_id === a.id)
+                    const lastEvent = agentEvents[agentEvents.length - 1]
+                    const isWorking = agentEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
+                    const isError = agentEvents.some(e => e.status === 'error')
+                    const isComplete = agentEvents.some(e => e.status === 'complete')
+                    const perf = agentPerf[a.id]
+                    const commsFrom = commEvents.filter(e => e.from === a.id).slice(-2)
+                    const commsTo = commEvents.filter(e => e.to === a.id).slice(-2)
+                    const lastComm = [...commsFrom, ...commsTo].sort((x, y) => (y.ts || '').localeCompare(x.ts || ''))[0]
+                    const seenAgo = lastSeenPerAgent[a.id]
+                    const agoText = typeof seenAgo === 'number' ? (seenAgo < 60 ? `${seenAgo}s` : `${Math.floor(seenAgo/60)}m`) : null
+
+                    return (
+                      <button key={a.id} onClick={() => setSelectedAgentDetail(a.id)}
+                        className={`w-full text-left rounded-lg p-2.5 border transition-all duration-200 hover:bg-app-elevated/80 ${isWorking ? 'border-yellow-500/30 bg-yellow-500/5' : isError ? 'border-red-500/30 bg-red-500/5' : isComplete ? 'border-green-500/20 bg-green-500/5' : 'border-app-elevated bg-transparent'}`}>
+                        <div className="flex items-center gap-2 mb-1">
+                          {isWorking ? <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse shrink-0"/> :
+                           isError ? <span className="w-2 h-2 bg-red-500 rounded-full shrink-0"/> :
+                           isComplete ? <span className="w-2 h-2 bg-green-500 rounded-full shrink-0"/> :
+                           <span className="w-2 h-2 bg-text-dim/30 rounded-full shrink-0"/>}
+                          <span className="text-sm">{a.icon}</span>
+                          <span className="text-[11px] font-medium text-text-primary truncate">{a.name}</span>
+                          {agoText && <span className="text-[8px] text-text-dim ml-auto">{agoText}</span>}
+                        </div>
+                        {lastEvent?.thought && (
+                          <div className={`text-[10px] leading-relaxed line-clamp-2 ${isWorking ? 'text-yellow-300/70' : isError ? 'text-red-400' : 'text-text-dim'}`}>
+                            {lastEvent.thought}
+                          </div>
+                        )}
+                        {lastComm && (
+                          <div className="text-[9px] text-text-dim/60 mt-0.5 flex items-center gap-1">
+                            <span>{agents.find(x => x.id === lastComm.from)?.icon||'🤖'}</span>
+                            <span className="truncate">→ {agents.find(x => x.id === lastComm.to)?.icon||'🤖'} {lastComm.action}</span>
+                          </div>
+                        )}
+                        {perf && (
+                          <div className="flex gap-2 mt-1 text-[8px] text-text-dim/50">
+                            <span>{perf.avg}s avg</span>
+                            {perf.fail_rate > 0 && <span className="text-red-400/60">{perf.fail_rate}% fails</span>}
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* TOAST NOTIFICATIONS */}
+      <div className="fixed bottom-16 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map(t => (
+          <div key={t.id}
+            className={`pointer-events-auto px-4 py-2.5 rounded-lg shadow-xl border text-xs font-medium animate-fade-in transition-all duration-300 ${
+              t.type === 'success' ? 'bg-green-900/90 border-green-500/40 text-green-300' :
+              t.type === 'error' ? 'bg-red-900/90 border-red-500/40 text-red-300' :
+              t.type === 'warning' ? 'bg-yellow-900/90 border-yellow-500/40 text-yellow-300' :
+              'bg-gray-900/90 border-gray-700/60 text-gray-300'
+            }`}>
+            {t.msg}
+          </div>
+        ))}
+      </div>
+
+      {/* AGENT DETAIL MODAL */}
+      {selectedAgentDetail && (() => {
+        const a = agents.find(x => x.id === selectedAgentDetail)
+        if (!a) { setTimeout(() => setSelectedAgentDetail(null), 0); return null }
+        const ae = thinkingEvents.filter(e => e.agent_id === a.id)
+        const lastEvent = ae[ae.length - 1]
+        const isWorking = ae.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
+        const commsTo = commEvents.filter(e => e.to === a.id)
+        const commsFrom = commEvents.filter(e => e.from === a.id)
+        const perf = agentPerf[a.id]
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setSelectedAgentDetail(null)}>
+            <div className="bg-gray-900 border border-gray-700 rounded-xl w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">{a.icon}</span>
+                  <div>
+                    <div className="text-sm font-medium text-text-primary">{a.name}</div>
+                    <div className="text-[10px] text-text-dim">{a.role}</div>
+                  </div>
+                  {isWorking && <span className="ml-2 text-[9px] text-yellow-400 animate-pulse">● LIVE</span>}
+                </div>
+                <button onClick={()=>setSelectedAgentDetail(null)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+                {/* Status */}
+                <div className="flex gap-3">
+                  <div className="bg-gray-800/60 rounded-lg px-3 py-2 flex-1 text-center">
+                    <div className="text-text-dim text-[9px]">Status</div>
+                    <div className={`font-medium mt-0.5 ${isWorking ? 'text-yellow-400' : lastEvent?.status === 'error' ? 'text-red-400' : lastEvent?.status === 'complete' ? 'text-green-400' : 'text-text-dim'}`}>
+                      {isWorking ? 'Working' : lastEvent?.status === 'error' ? 'Error' : lastEvent?.status === 'complete' ? 'Done' : 'Idle'}
+                    </div>
+                  </div>
+                  {perf && <div className="bg-gray-800/60 rounded-lg px-3 py-2 flex-1 text-center">
+                    <div className="text-text-dim text-[9px]">Avg Time</div>
+                    <div className="font-medium mt-0.5 text-accent">{perf.avg}s</div>
+                  </div>}
+                  {perf?.fail_rate !== undefined && <div className="bg-gray-800/60 rounded-lg px-3 py-2 flex-1 text-center">
+                    <div className="text-text-dim text-[9px]">Fail Rate</div>
+                    <div className="font-medium mt-0.5 text-red-400">{perf.fail_rate}%</div>
+                  </div>}
+                </div>
+
+                {/* Recent Thinking */}
+                <div>
+                  <div className="text-[9px] text-text-dim uppercase tracking-wider font-medium mb-1.5">Recent Activity</div>
+                  {ae.length === 0 ? (
+                    <div className="text-text-dim/50 italic">No activity recorded</div>
+                  ) : (
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {[...ae].reverse().slice(0, 10).map((ev, i) => (
+                        <div key={i} className="bg-gray-800/40 rounded px-2.5 py-1.5 border border-gray-800">
+                          <div className="flex items-center gap-1.5 text-[10px]">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ev.status === 'error' ? 'bg-red-500' : ev.status === 'complete' ? 'bg-green-500' : ev.status === 'started' || ev.status === 'thinking' || ev.status === 'synthesizing' ? 'bg-yellow-400 animate-pulse' : 'bg-text-dim'}`}/>
+                            <span className="text-text-dim">{ev.status}</span>
+                            <span className="text-text-dim/50 ml-auto">{fmtTime(ev.ts)}</span>
+                          </div>
+                          <div className="text-[10px] text-text-dim/80 mt-0.5 line-clamp-2">{ev.thought}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Communications */}
+                <div>
+                  <div className="text-[9px] text-text-dim uppercase tracking-wider font-medium mb-1.5">Recent Communications</div>
+                  {commsTo.length === 0 && commsFrom.length === 0 ? (
+                    <div className="text-text-dim/50 italic">No communications yet</div>
+                  ) : (
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {[...commsTo, ...commsFrom].sort((x, y) => (y.ts || '').localeCompare(x.ts || '')).slice(0, 8).map((ev, i) => {
+                        const fromAg = agents.find(x => x.id === ev.from)
+                        const toAg = agents.find(x => x.id === ev.to)
+                        return (
+                          <div key={i} className="bg-gray-800/40 rounded px-2.5 py-1.5 border border-gray-800 text-[10px]">
+                            <span className="text-gray-500">{fromAg?.icon||'🤖'} {ev.from}</span>
+                            <span className="text-gray-600 mx-1">→</span>
+                            <span className="text-gray-500">{toAg?.icon||'🤖'} {ev.to}</span>
+                            <span className={`ml-1 ${ev.action === 'delegate' ? 'text-yellow-400' : ev.action === 'result' ? 'text-green-400' : 'text-text-dim'}`}>{ev.action}</span>
+                            <div className="text-text-dim/60 mt-0.5 line-clamp-1">{ev.content?.slice(0, 100) || ''}</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Tools used */}
+                <div>
+                  <div className="text-[9px] text-text-dim uppercase tracking-wider font-medium mb-1.5">Agent Details</div>
+                  <div className="bg-gray-800/40 rounded px-3 py-2 border border-gray-800 text-[10px] space-y-1">
+                    <div className="flex justify-between"><span className="text-text-dim">ID</span><span className="text-text-primary">{a.id}</span></div>
+                    <div className="flex justify-between"><span className="text-text-dim">Role</span><span className="text-text-primary">{a.role}</span></div>
+                    <div className="flex justify-between"><span className="text-text-dim">Events</span><span className="text-text-primary">{ae.length}</span></div>
+                    {perf && <div className="flex justify-between"><span className="text-text-dim">Total Calls</span><span className="text-text-primary">{perf.calls || 0}</span></div>}
+                  </div>
+                </div>
+
+                {/* Navigate to chat */}
+                <button onClick={() => { setSelectedAgentDetail(null); switchAgent(a.id) }}
+                  className="w-full bg-accent/10 hover:bg-accent/20 text-accent border border-accent/20 rounded-lg px-3 py-2 text-xs font-medium transition-colors">
+                  💬 Open {a.name} Chat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* AGENT CONSOLE */}
       {showConsole && (
@@ -1326,16 +1721,30 @@ img{max-width:100%;height:auto}`
                   className={`text-xs font-medium pb-1 border-b-2 transition-colors ${consoleTab==='activity'?'text-emerald-400 border-emerald-400':'text-gray-500 border-transparent hover:text-gray-300'}`}>
                   ⚡ Activity
                 </button>
+                <button onClick={()=>setConsoleTab('backendlog')}
+                  className={`text-xs font-medium pb-1 border-b-2 transition-colors ${consoleTab==='backendlog'?'text-emerald-400 border-emerald-400':'text-gray-500 border-transparent hover:text-gray-300'}`}>
+                  📜 Backend Log
+                </button>
                 <button onClick={()=>setConsoleTab('commlog')}
                   className={`text-xs font-medium pb-1 border-b-2 transition-colors ${consoleTab==='commlog'?'text-emerald-400 border-emerald-400':'text-gray-500 border-transparent hover:text-gray-300'}`}>
                   📋 Comm Log
                 </button>
               </div>
-              <button onClick={()=>setShowConsole(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => {
+                  const el = document.getElementById('console-tab-content')
+                  if (!el) return
+                  const text = el.innerText || el.textContent || ''
+                  navigator.clipboard.writeText(text).then(() => {
+                    addToast('📋 Console tab copied', 'success')
+                  }).catch(() => {})
+                }} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors" title="Copy tab content">📋</button>
+                <button onClick={()=>setShowConsole(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              </div>
             </div>
 
             {consoleTab === 'activity' && (
-              <div className="flex-1 overflow-y-auto p-3">
+              <div id="console-tab-content" className="flex-1 overflow-y-auto p-3">
                 <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
                   {agents.map(a => {
                     const th = thinkingEvents.filter(e => e.agent_id === a.id)
@@ -1379,8 +1788,59 @@ img{max-width:100%;height:auto}`
               </div>
             )}
 
+            {consoleTab === 'backendlog' && (
+              <div id="console-tab-content" className="flex-1 overflow-y-auto p-3">
+                <div className="mb-2 flex items-center gap-2 text-[10px] text-gray-600">
+                  <span>{liveEvents.length} events</span>
+                  <button onClick={() => setLiveEvents([])} className="text-gray-600 hover:text-red-400 transition-colors">clear</button>
+                </div>
+                <div className="space-y-0.5 font-mono text-[9px]">
+                  {liveEvents.length === 0 ? (
+                    <div className="text-center py-8 text-gray-600 text-xs">No backend events yet. Send a message to trigger activity.</div>
+                  ) : (
+                    [...liveEvents].reverse().map((ev, i) => {
+                      const ts = ev.ts ? fmtTime(ev.ts) : ''
+                      let icon = '·', color = 'text-gray-500', agentLabel = ''
+                      switch (ev._liveType) {
+                        case 'engine_call': icon = '⚡'; color = 'text-blue-400'; break
+                        case 'tool_exec': icon = '🔧'; color = 'text-amber-400'; break
+                        case 'api_request': icon = '📡'; color = 'text-purple-400'; break
+                        case 'thinking': icon = '⏳'; color = 'text-amber-400'; break
+                        case 'complete': icon = '✅'; color = 'text-green-400'; break
+                        case 'error': icon = '❌'; color = 'text-red-400'; break
+                        case 'comm':
+                          const fa = agents.find(x => x.id === ev.from)
+                          const ta = agents.find(x => x.id === ev.to)
+                          icon = `${fa?.icon||'🤖'} ${ev.from}→${ta?.icon||'🤖'}`
+                          color = ev.action === 'delegate' ? 'text-amber-400' : ev.action === 'result' ? 'text-green-400' : 'text-gray-400'
+                          break
+                        case 'progress': icon = '🔧'; color = 'text-accent'; break
+                        default: icon = '·'; break
+                      }
+                      if (ev.agent_id && ev._liveType !== 'comm') {
+                        const ag = agents.find(x => x.id === ev.agent_id)
+                        agentLabel = ag ? `${ag.icon||''} ` : ''
+                      }
+                      const content = ev.content || ev.thought || ev.message || ev.tool || ev.text || ''
+                      return (
+                        <div key={i} className={`flex gap-2 ${color} hover:bg-gray-800/30 rounded px-1 py-0.5`}>
+                          <span className="text-gray-700 shrink-0 w-14">{ts}</span>
+                          <span className="shrink-0 w-16 text-[8px] text-gray-700">{ev._liveType||''}</span>
+                          <span className="shrink-0">{icon}</span>
+                          <span className="text-gray-600 shrink-0">{agentLabel}</span>
+                          <span className="truncate">{content}</span>
+                          {ev.engine_id && <span className="text-gray-700 shrink-0 ml-auto">[{ev.engine_id}]</span>}
+                          {ev.duration_s && <span className="text-gray-700 shrink-0">({ev.duration_s}s)</span>}
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
             {consoleTab === 'commlog' && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-1">
+              <div id="console-tab-content" className="flex-1 overflow-y-auto p-3 space-y-1">
                 {commEvents.length === 0 ? (
                   <div className="text-center py-8 text-gray-600 text-xs">No communication yet. Send a task to CEO to see agent interactions.</div>
                 ) : (

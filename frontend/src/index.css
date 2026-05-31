@@ -101,6 +101,7 @@ body {
 
 .render-html {
   word-break: break-word;
+  overflow-wrap: break-word;
   color: var(--color-text-primary);
   font-size: inherit;
   line-height: 1.65;
@@ -208,6 +209,14 @@ body {
   padding: 10px 16px;
   position: relative;
   transition: box-shadow 0.15s;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  overflow-x: hidden;
+}
+.msg-bubble pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .msg-bubble:hover {
   box-shadow: 0 2px 12px rgba(99, 102, 241, 0.08);
@@ -436,6 +445,26 @@ body {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
   30% { transform: translateY(-6px); opacity: 1; }
 }
+
+/* ── Toast Slide In ── */
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in {
+  animation: slideInRight 0.25s ease-out;
+}
+
+/* ── Agent Sidebar Pulse ── */
+@keyframes pulse-live {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.live-pulse {
+  animation: pulse-live 1.2s ease-in-out infinite;
+}
+
+.bg-info { background: #3b82f6; }
 
 /* ── Context Drawer Tabs ── */
 .drawer-tab {

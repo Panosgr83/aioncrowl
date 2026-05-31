@@ -9,6 +9,7 @@ class AgentBus:
     def __init__(self):
         self.connections = set()
         self.history = []
+        self.engine_cache = {}  # agent_id -> best engine id
 
     def broadcast(self, msg):
         payload = json.dumps(msg, ensure_ascii=False)
@@ -132,8 +133,11 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
         "ts": datetime.now().isoformat(),
     })
 
+    greek_lang = "ΓΡΑΨΕ ΣΕ ΣΩΣΤΑ ΕΛΛΗΝΙΚΑ: χρησιμοποίησε σωστή γραμματική, συντακτικό και ορθογραφία. Απόφυγε αγγλισμούς. Οι προτάσεις να έχουν νόημα και ροή."
     system_prompt = f"""Είσαι ο {agent['name']}.
 {agent['system_prompt']}
+
+{greek_lang}
 
 Σου ανατέθηκε μια εργασία από τον CEO.
 Εργασία: {task}
@@ -156,9 +160,15 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
         engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or []
     else:
         suggested = suggest_engine_for(task_type, needs_tools=True)
-        engines_to_try = get_active_engines()
+        engines_to_try = get_active_engines(task_type=task_type, needs_tools=True)
         if suggested and suggested in engines_to_try:
             engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
+        # Move cached engine to front if still active
+        cached_id = bus.engine_cache.get(agent_id)
+        if cached_id:
+            cached = next((e for e in ENGINES if e["id"] == cached_id), None)
+            if cached and cached in engines_to_try:
+                engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
 
     if not engines_to_try:
         return f"❌ Δεν υπάρχει διαθέσιμο engine για {agent_id}"
@@ -171,10 +181,119 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
                        "imggen": 4, "seo": 3, "offers": 3, "pm": 3, "consultant": 3, "content": 3, "docsagent": 3}
     total_steps = step_estimates.get(agent_id, 3)
 
+    # Compare: skip two-call for simple agents
+    is_simple_task = task_type == "simple" or (len(task) < 200 and not any(w in task for w in ["γράψε", "δημιούργησε", "ανέλυσε", "βρες", "run", "write", "create", "search"]))
+
     for engine in engines_to_try:
         try:
             t0 = time_module.time()
             agent_tools = get_tool_definitions_for_agent(agent_id)
+
+            # Simple agents: single-call optimization (skip tool planning)
+            if is_simple_task and agent_tools:
+                resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type="simple")
+                t1 = time_module.time()
+                record_engine_perf(engine["id"], t1 - t0, True)
+                data = resp.json()
+                choice = data["choices"][0]
+                msg = choice["message"]
+                text = msg.get("content", "")
+
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    from tools import parse_xml_tool_calls
+                    tool_calls, cleaned = parse_xml_tool_calls(text)
+                    if tool_calls:
+                        text = cleaned
+
+                if tool_calls:
+                    num_tools = len(tool_calls)
+                    for i, tc in enumerate(tool_calls):
+                        done_steps += 1
+                        pct = min(int(done_steps / total_steps * 100), 95)
+                        if isinstance(tc, dict):
+                            fn = tc.get("function", {}).get("name", "")
+                            fa = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                            tid = tc.get("id", "")
+                        else:
+                            fn = tc.function.name
+                            fa = json.loads(tc.function.arguments)
+                            tid = tc.id
+
+                        remaining = max(1, int(estimated_seconds * (1 - done_steps / total_steps)))
+                        bus.broadcast({
+                            "type": "task_progress",
+                            "agent_id": agent_id,
+                            "status": "running",
+                            "progress": pct,
+                            "message": f"🔧 {agent_id}: {fn} ({i+1}/{num_tools})",
+                            "estimated_seconds": estimated_seconds,
+                            "remaining_seconds": remaining,
+                            "started_at": started_at,
+                            "ts": datetime.now().isoformat(),
+                        })
+                        bus.broadcast({
+                            "type": "agent_thinking",
+                            "agent_id": agent_id,
+                            "status": "thinking",
+                            "thought": f"💭 {agent_icon} {agent['name']}: εκτελεί {fn} ({i+1}/{num_tools})",
+                            "estimated_seconds": estimated_seconds,
+                            "remaining_seconds": remaining,
+                            "started_at": started_at,
+                            "ts": datetime.now().isoformat(),
+                        })
+                        bus.broadcast({
+                            "type": "agent_tool_step",
+                            "agent_id": agent_id,
+                            "tool": fn,
+                            "args_preview": str(list(fa.keys()))[:100] if fa else "",
+                            "status": "started",
+                            "ts": datetime.now().isoformat(),
+                        })
+                        result = execute_tool(fn, fa)
+                        bus.broadcast({
+                            "type": "agent_tool_step",
+                            "agent_id": agent_id,
+                            "tool": fn,
+                            "status": "done",
+                            "ts": datetime.now().isoformat(),
+                        })
+                        messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
+                        messages.append({"role": "tool", "content": result, "tool_call_id": tid})
+
+                    bus.broadcast({
+                        "type": "agent_thinking",
+                        "agent_id": agent_id,
+                        "status": "synthesizing",
+                        "thought": f"🧠 {agent_icon} {agent['name']}: συνθέτει αποτελέσματα...",
+                        "estimated_seconds": estimated_seconds,
+                        "started_at": started_at,
+                        "ts": datetime.now().isoformat(),
+                    })
+                    t2 = time_module.time()
+                    final_resp = call_engine(engine, messages, stream=False, task_type="simple")
+                    t3 = time_module.time()
+                    record_engine_perf(engine["id"], t3 - t2, True)
+                    final_data = final_resp.json()
+                    text = final_data["choices"][0]["message"].get("content", "")
+
+                tool_count = len(tool_calls) if tool_calls else 0
+                duration = time_module.time() - start_time
+                log_performance(agent_id, task, duration, engine["id"], True, tool_calls=tool_count)
+                bus.engine_cache[agent_id] = engine["id"]
+                bus.broadcast({
+                    "type": "agent_thinking",
+                    "agent_id": agent_id,
+                    "status": "complete",
+                    "thought": f"✅ {agent_icon} {agent['name']} ολοκλήρωσε σε {duration:.1f}s",
+                    "estimated_seconds": estimated_seconds,
+                    "duration_s": round(duration, 1),
+                    "started_at": started_at,
+                    "ts": datetime.now().isoformat(),
+                })
+                return text
+
+            # Normal two-call flow for complex agents
             resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type=task_type)
             t1 = time_module.time()
             record_engine_perf(engine["id"], t1 - t0, True)
@@ -264,6 +383,7 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
 
             duration = time_module.time() - start_time
             log_performance(agent_id, task, duration, engine["id"], True, tool_calls=num_tools if msg.get("tool_calls") else 0)
+            bus.engine_cache[agent_id] = engine["id"]
 
             bus.broadcast({
                 "type": "agent_thinking",
