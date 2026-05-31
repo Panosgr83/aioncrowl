@@ -90,6 +90,18 @@
 - **web_fetch retry** — 3 attempts with 1s/2s/4s backoff for 429/503
 - **Session save** — merge (append, never overwrite)
 
+### VPS Deployment
+- **`scripts/deploy/deploy.sh`** — one-command VPS setup on Ubuntu 24.04
+  - Installs Python, Node, Nginx, certbot, UFW, fail2ban
+  - Clones repo, builds frontend, installs deps
+  - Configures Nginx reverse proxy with SSL (Let's Encrypt)
+  - Creates systemd service with auto-restart
+  - Hardens security: firewall (22/80/443), fail2ban, no-new-privileges
+- **`scripts/deploy/aionclaw.service`** — systemd unit with ProtectSystem, PrivateTmp
+- **`scripts/deploy/aionclaw.nginx`** — Nginx config: HTTPS redirect, SSL ciphers, security headers, WebSocket support
+- Supports custom domain with automated SSL
+- Data dir (`~/AION/`) lives separately from app code for persistence
+
 ### New Engines (total: 12)
 | Engine | Speed | Tools | Priority |
 |--------|-------|-------|----------|

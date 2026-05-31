@@ -1,0 +1,24 @@
+[Unit]
+Description=AIONCLAW Multi-Agent System
+After=network.target
+
+[Service]
+Type=simple
+User=aion
+Group=aion
+WorkingDirectory=/opt/aionclaw/backend
+Environment=PORT=9790
+ExecStart=/usr/bin/python3 /opt/aionclaw/backend/main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=/home/aion/AION
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
