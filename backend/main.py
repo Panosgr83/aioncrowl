@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key, suggest_engine_for, record_engine_perf
@@ -1220,6 +1221,14 @@ async def websocket_collab(ws: WebSocket):
     finally:
         bus.connections.discard(ws)
         print("Collab WS disconnected")
+
+# Serve built frontend for remote access via ngrok
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    print(f"Frontend served from {FRONTEND_DIST}")
+else:
+    print(f"Frontend dist not found at {FRONTEND_DIST}, run 'npm run build' in frontend/")
 
 if __name__ == "__main__":
     # Ensure .env is loaded (redundant with engine._load_env but safe)

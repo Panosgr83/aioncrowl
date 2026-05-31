@@ -36,10 +36,28 @@ def _run_ngrok(port: int):
         TUNNEL_STATUS["error"] = None
         while not _stop_event.is_set():
             _stop_event.wait(1)
-        ngrok.disconnect(tunnel.public_url)
+        try:
+            ngrok.disconnect(tunnel.public_url)
+        except:
+            pass
         ngrok.kill()
     except Exception as e:
-        TUNNEL_STATUS["error"] = f"ngrok failed: {e}"
+        # If endpoint already exists, kill and retry once
+        if "already online" in str(e):
+            ngrok.kill()
+            import time
+            time.sleep(2)
+            try:
+                tunnel = ngrok.connect(port, "http", bind_tls=True)
+                TUNNEL_STATUS["url"] = tunnel.public_url
+                TUNNEL_STATUS["method"] = "ngrok"
+                TUNNEL_STATUS["active"] = True
+                TUNNEL_STATUS["error"] = None
+                return
+            except Exception as e2:
+                TUNNEL_STATUS["error"] = f"ngrok failed (retry): {e2}"
+        else:
+            TUNNEL_STATUS["error"] = f"ngrok failed: {e}"
         TUNNEL_STATUS["active"] = False
 
 def start_tunnel(port: int = 9790):
