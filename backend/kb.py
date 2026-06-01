@@ -1,10 +1,7 @@
 import json, os, hashlib, time, threading
 import numpy as np
 from datetime import datetime
-
-AION_DIR = os.path.expanduser("~/AION")
-KB_ROOT = os.path.join(AION_DIR, "aionclaw", "knowledge")
-PROJECT_FILE = os.path.join(AION_DIR, "MEMORY", "project.json")
+from config import AION_DIR, MEMORY_DIR, KB_ROOT, PROJECT_FILE
 
 _model = None
 _model_lock = threading.Lock()

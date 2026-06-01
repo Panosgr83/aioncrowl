@@ -1,6 +1,6 @@
 import os, threading, time
+from config import AION_DIR, DOTENV_FILE
 
-AION_DIR = os.path.expanduser("~/AION")
 TUNNEL_STATUS = {"active": False, "url": None, "error": None, "method": None}
 _tunnel_thread = None
 _stop_event = threading.Event()
@@ -9,7 +9,7 @@ def _get_env_var(name):
     val = os.environ.get(name, "")
     if val:
         return val
-    env_path = os.path.join(AION_DIR, ".env")
+    env_path = str(DOTENV_FILE)
     try:
         if os.path.exists(env_path):
             with open(env_path) as f:

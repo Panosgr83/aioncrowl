@@ -1,7 +1,7 @@
 import json, os
+from config import MEMORY_DIR
 
-AION_DIR = os.path.expanduser("~/AION")
-READS_FILE = os.path.join(AION_DIR, "MEMORY", "reads.json")
+READS_FILE = str(MEMORY_DIR / "reads.json")
 
 def get_reads():
     try:

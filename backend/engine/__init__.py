@@ -1,12 +1,42 @@
 import json, os, time, threading
 from datetime import datetime
+from config import AION_DIR, MEMORY_DIR, PERF_FILE, ENGINE_STATUS_FILE, DOTENV_FILE
 
-AION_DIR = os.path.expanduser("~/AION")
 ENGINE_LOCK = threading.Lock()
-PERF_FILE = os.path.join(AION_DIR, "MEMORY", "engine_perf.json")
+
+# Engine perf cache (10s TTL, avoids file I/O on every scoring call)
+_perf_cache = None
+_perf_cache_ts = 0
+PERF_CACHE_TTL = 10
+
+def _load_perf_cached():
+    global _perf_cache, _perf_cache_ts
+    now = time.time()
+    if _perf_cache is not None and now - _perf_cache_ts < PERF_CACHE_TTL:
+        return _perf_cache
+    try:
+        if os.path.exists(PERF_FILE):
+            with open(PERF_FILE) as f:
+                _perf_cache = json.load(f)
+                _perf_cache_ts = now
+                return _perf_cache
+    except: pass
+    _perf_cache = {}
+    _perf_cache_ts = now
+    return _perf_cache
+
+def _save_perf(data):
+    global _perf_cache, _perf_cache_ts
+    _perf_cache = data
+    _perf_cache_ts = time.time()
+    try:
+        os.makedirs(os.path.dirname(PERF_FILE), exist_ok=True)
+        with open(PERF_FILE, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except: pass
 
 def _load_env():
-    env_file = os.path.join(AION_DIR, ".env")
+    env_file = str(DOTENV_FILE)
     if os.path.exists(env_file):
         with open(env_file) as f:
             for line in f:
@@ -78,12 +108,7 @@ def get_api_key(engine_id):
     return FALLBACK_KEYS.get(engine_id, "")
 
 def _load_perf():
-    try:
-        if os.path.exists(PERF_FILE):
-            with open(PERF_FILE) as f:
-                return json.load(f)
-    except: pass
-    return {}
+    return _load_perf_cached()
 
 def _save_perf(data):
     try:
@@ -142,12 +167,21 @@ def get_engine_score(engine, task_type="general"):
     if task_type in ("coding", "reasoning", "tools") and engine["capability"] == "high":
         score += 200
     score += (10 - engine["priority"]) * 10
-    if eid in ("openrouter", "openrouter_deepseek", "openrouter_llama", "groq", "groq_8b"):
-        score += 600
-    if eid == "openrouter_deepseek":
-        score += 300
-    if task_type == "simple" and eid == "groq_8b":
-        score += 600
+    # Reliability bonus: non-OpenRouter engines with dedicated API keys go FIRST
+    if eid == "cerebras":
+        score += 2000  # reliable, fast, supports tools
+    elif eid == "gemini":
+        score += 1500  # reliable Google free tier
+    elif eid in ("groq", "groq_8b"):
+        score += 500   # dedicated key but rate limited (30/min)
+    elif eid == "sambanova":
+        score += 300   # no tools, slow but reliable
+    # OpenRouter engines that may still have quota
+    if eid in ("openrouter", "openrouter_deepseek"):
+        score += 200
+    # Penalise free OpenRouter models that frequently hit daily limits
+    if eid in ("openrouter_nemotron", "openrouter_qwen", "openrouter_gemma", "openrouter_llama"):
+        score -= 2000  # tried LAST, after all other options exhausted
     return score
 
 def suggest_engine_for(task_type="general", needs_tools=True):
@@ -179,6 +213,10 @@ def get_active_engines(task_type=None, needs_tools=None):
             continue
         if not get_api_key(e["id"]):
             continue
+        # Allow env var override for local engines (e.g. OLLAMA_BASE_URL for remote ollama)
+        env_base = os.environ.get(f"{e['id'].upper()}_BASE_URL", "")
+        if env_base:
+            e["base_url"] = env_base
         # Always score by speed + performance, never by raw priority
         s = get_engine_score(e, task_type or "general")
         scored.append((s, e))
@@ -187,7 +225,7 @@ def get_active_engines(task_type=None, needs_tools=None):
 
 def load_engine_status():
     now = time.time()
-    path = os.path.join(AION_DIR, "engine_status.json")
+    path = str(ENGINE_STATUS_FILE)
     try:
         if os.path.exists(path):
             with open(path) as f:
@@ -198,7 +236,6 @@ def load_engine_status():
                     s = status_map.get(e["id"], {})
                     status = s.get("status", "active")
                     cooldown = s.get("cooldown_until", 0)
-                    # Auto-expire stale cooldowns
                     if status != "active" and cooldown <= now:
                         status = "active"
                         cooldown = 0
@@ -210,7 +247,7 @@ def load_engine_status():
     except: pass
 
 def save_engine_status():
-    path = os.path.join(AION_DIR, "engine_status.json")
+    path = str(ENGINE_STATUS_FILE)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         data = [{"id": e["id"], "status": e.get("status", "active"), "cooldown_until": e.get("cooldown_until", 0)} for e in ENGINES]
@@ -247,7 +284,7 @@ _call_history = {}
 # Auto fallback — consecutive failure tracking
 _consecutive_failures = {}
 ENGINE_FALLBACK_THRESHOLD = 2
-ENGINE_FALLBACK_COOLDOWN = 300
+ENGINE_FALLBACK_COOLDOWN = 600  # 10min after 2 consecutive failures
 
 def check_rate_limit(engine_id):
     now = time.time()
@@ -318,9 +355,13 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None, tas
         if task_type == "simple":
             max_tokens = 512
         elif task_type == "reasoning":
-            max_tokens = 1024
+            max_tokens = 4096
         elif task_type == "coding":
+            max_tokens = 4096
+        elif task_type == "general":
             max_tokens = 2048
+        elif task_type == "tools":
+            max_tokens = 4096
         else:
             max_tokens = min(engine.get("max_tokens", 4096), 2048)
 
@@ -333,24 +374,31 @@ def call_engine(engine, messages, tools=None, stream=False, max_tokens=None, tas
     if tools and engine["supports_tools"]:
         body["tools"] = tools
 
-    timeout = 25 if stream else 15
     if stream:
+        conn_to = 5 if task_type != "simple" else 3
+        read_to = 15 if task_type != "simple" else 8
         resp = requests.post(
             f"{engine['base_url']}/chat/completions",
-            headers=headers, json=body, timeout=timeout, stream=True
+            headers=headers, json=body, timeout=(conn_to, read_to), stream=True
         )
     else:
+        conn_to = 4 if task_type != "simple" else 2
+        read_to = 10 if task_type != "simple" else 5
         resp = requests.post(
             f"{engine['base_url']}/chat/completions",
-            headers=headers, json=body, timeout=timeout
+            headers=headers, json=body, timeout=(conn_to, read_to)
         )
 
     if resp.status_code != 200:
         error_msg = resp.text[:500]
-        if "rate limit" in error_msg.lower() or resp.status_code == 429 or "413" in error_msg:
-            mark_engine(engine["id"], "rate_limited", 180)
+        if "free-models-per-day" in error_msg.lower() or "daily" in error_msg.lower() and "limit" in error_msg.lower():
+            mark_engine(engine["id"], "quota_exhausted", 86400)  # 24h for daily limits
+        elif "rate limit" in error_msg.lower() or resp.status_code == 429 or "413" in error_msg:
+            mark_engine(engine["id"], "rate_limited", 300)  # 5min for rate limits
         elif "quota" in error_msg.lower() or "billing" in error_msg.lower():
             mark_engine(engine["id"], "quota_exhausted", 7200)
+        elif resp.status_code in (502, 503):
+            mark_engine(engine["id"], "timeout", 120)
         raise Exception(f"API error {resp.status_code}: {error_msg}")
 
     record_call(engine["id"])

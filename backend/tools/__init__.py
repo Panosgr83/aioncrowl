@@ -1,11 +1,9 @@
 import json, os, subprocess, requests, time, asyncio, threading
 from datetime import datetime
+from config import AION_DIR, MEMORY_FILE, MEMORY_DIR, ACTIVITY_FILE, UPLOADS_DIR, SESSIONS_DIR, CRM_DIR, LEADS_FILE
 
-AION_DIR = os.path.expanduser("~/AION")
-MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
 PERF_START = {}
 MEMORY_LOCK = threading.Lock()
-ACTIVITY_FILE = os.path.join(AION_DIR, "MEMORY", "activity.jsonl")
 
 # Memory recall cache (30s TTL)
 _recall_cache = {}
@@ -138,7 +136,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Γράψε περιεχόμενο σε αρχείο. Δημιουργεί το αρχείο αν δεν υπάρχει.",
+            "description": "Γράψε περιεχόμενο (TEXT/HTML/markdown) σε αρχείο. Δημιουργεί το αρχείο αν δεν υπάρχει. ΜΗΝ το χρησιμοποιείς για Word/Excel/PowerPoint — υπάρχουν generate_docx, generate_xlsx, generate_pptx γι' αυτά.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -295,7 +293,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "send_to_agent",
-            "description": "ΣΤΕΙΛΕ μήνυμα σε άλλο agent. Χρησιμοποιείται για επικοινωνία μεταξύ agents (π.χ. Developer → Lead Finder, ή οποιοσδήποτε agent → CEO). Ο παραλήπτης agent θα επεξεργαστεί το μήνυμα και θα απαντήσει.",
+            "description": "ΣΤΕΙΛΕ μήνυμα σε άλλο agent. Η επικοινωνία μεταξύ agents γίνεται σε COMPACT format (δομημένο, όχι φυσική γλώσσα) για ταχύτητα. Χρησιμοποίησε format:'full' μόνο για τελικά μηνύματα προς τον χρήστη.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -304,8 +302,13 @@ TOOL_DEFINITIONS = [
                         "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent", "ceo"],
                         "description": "Ποιος agent θα λάβει το μήνυμα"
                     },
-                    "message": {"type": "string", "description": "Το μήνυμα προς τον agent"},
-                    "context": {"type": "string", "description": "Πρόσθετες πληροφορίες context"}
+                    "message": {"type": "string", "description": "Το μήνυμα — σε COMPACT format για agent-to-agent, φυσική γλώσσα μόνο αν format:'full'"},
+                    "context": {"type": "string", "description": "Πρόσθετες πληροφορίες context"},
+                    "format": {
+                        "type": "string",
+                        "enum": ["compact", "full"],
+                        "description": "compact: σύντομο/δομημένο (default, για agent-to-agent). full: φυσική γλώσσα (για τελικό output στον χρήστη)"
+                    }
                 },
                 "required": ["agent_id", "message"]
             }
@@ -343,7 +346,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delegate_to_agent",
-            "description": "ΑΝΑΘΕΣΕ εργασία σε άλλο agent. Ο CEO το χρησιμοποιεί για να συντονίζει την ομάδα. Ο sub-agent θα επεξεργαστεί την εργασία και θα επιστρέψει αποτέλεσμα.",
+            "description": "ΑΝΑΘΕΣΕ εργασία σε άλλο agent σε COMPACT format. Μόνο το τελικό output προς τον χρήστη γράφεται σε φυσική γλώσσα.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -352,8 +355,13 @@ TOOL_DEFINITIONS = [
                         "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent"],
                         "description": "Ποιος agent θα εκτελέσει την εργασία"
                     },
-                    "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
-                    "context": {"type": "string", "description": "Πρόσθετες πληροφορίες context"}
+                    "task": {"type": "string", "description": "COMPACT task description (όχι φυσική γλώσσα — π.χ. AUDIT src/auth.py FOCUS: sqli,xss)"},
+                    "context": {"type": "string", "description": "Πρόσθετες πληροφορίες (compact)"},
+                    "format": {
+                        "type": "string",
+                        "enum": ["compact", "full"],
+                        "description": "compact: δομημένο/σύντομο (default). full: φυσική γλώσσα (μόνο όταν το αποτέλεσμα πάει σε χρήστη)"
+                    }
                 },
                 "required": ["agent_id", "task"]
             }
@@ -363,7 +371,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "parallel_delegate",
-            "description": "ΑΝΑΘΕΣΕ εργασίες σε ΠΟΛΛΟΥΣ agents ταυτόχρονα. Χρησιμοποίησέ το όταν θέλεις πολλοί agents να δουλέψουν παράλληλα (π.χ. dev + security + analytics μαζί). Οι agents τρέχουν ταυτόχρονα και επιστρέφουν όλα τα αποτελέσματα.",
+            "description": "ΑΝΑΘΕΣΕ εργασίες σε ΠΟΛΛΟΥΣ agents ταυτόχρονα σε COMPACT format. Οι agents τρέχουν παράλληλα και επιστρέφουν αποτελέσματα.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -377,8 +385,13 @@ TOOL_DEFINITIONS = [
                                     "enum": ["dev", "leadfinder", "memory", "sales", "marketing", "content", "support", "analytics", "security", "finance", "imggen", "seo", "offers", "pm", "consultant", "docsagent"],
                                     "description": "Ποιος agent θα εκτελέσει την εργασία"
                                 },
-                                "task": {"type": "string", "description": "Τι θέλεις να κάνει (αναλυτική περιγραφή)"},
-                                "context": {"type": "string", "description": "Πρόσθετες πληροφορίες context (προαιρετικό)"}
+                                "task": {"type": "string", "description": "COMPACT task (όχι φυσική γλώσσα)"},
+                                "context": {"type": "string", "description": "Πρόσθετες πληροφορίες (compact, προαιρετικό)"},
+                                "format": {
+                                    "type": "string",
+                                    "enum": ["compact", "full"],
+                                    "description": "compact: δομημένο/σύντομο (default). full: φυσική γλώσσα"
+                                }
                             },
                             "required": ["agent_id", "task"]
                         },
@@ -419,13 +432,85 @@ TOOL_DEFINITIONS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_docx",
+            "description": "Δημιούργησε ΕΠΑΓΓΕΛΜΑΤΙΚΟ Word έγγραφο (.docx) πολλών σελίδων με εκτενή ανάλυση, πολλαπλές ενότητες, πίνακες, λίστες. ΑΠΑΙΤΟΥΝΤΑΙ πολλές λεπτομέρειες — το έγγραφο πρέπει να είναι πλήρες, αναλυτικό, επαγγελματικό. Ιδανικό για proposals, reports, συμβόλαια, προσφορές. ΧΡΗΣΙΜΟΠΟΙΗΣΕ το για any professional έγγραφο — μη γράφεις απλό κείμενο. ΠΡΟΣΟΧΗ: μην είσαι συνοπτικός — γράψε ΕΚΤΕΝΕΣ περιεχόμενο με πολλές παραγράφους ανά ενότητα.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Τίτλος του εγγράφου"},
+                    "sections_json": {"type": "string", "description": "JSON array από ενότητες — ΒΑΛΕ ΠΟΛΛΕΣ ενότητες (8-15) με ΕΚΤΕΝΕΣ περιεχόμενο. Κάθε section: {heading, content (αναλυτικό κείμενο πολλών προτάσεων), table:{headers,rows}, list:[], type:'text|table|list'}. Το content πρέπει να έχει πολλές παραγράφους, όχι μία πρόταση."},
+                    "filename": {"type": "string", "description": "Όνομα αρχείου (π.χ. report.docx)"}
+                },
+                "required": ["title", "sections_json", "filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_xlsx",
+            "description": "Δημιούργησε ΕΠΑΓΓΕΛΜΑΤΙΚΟ Excel αρχείο (.xlsx) με φύλλα εργασίας, πίνακες, δεδομένα, headers, αριθμητικά στοιχεία. Ιδανικό για data reports, budgets, financials, προσφορές με αριθμούς. Αποθηκεύεται αυτόματα στο uploads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Όνομα αρχείου (π.χ. data.xlsx)"},
+                    "sheets_json": {"type": "string", "description": "JSON array φύλλων: [{name, headers:[], rows:[[]]}]"}
+                },
+                "required": ["filename", "sheets_json"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_pptx",
+            "description": "Δημιούργησε ΕΠΑΓΓΕΛΜΑΤΙΚΗ παρουσίαση PowerPoint (.pptx) με slides, τίτλους, bullet points και περιεχόμενο. Ιδανικό για pitches, παρουσιάσεις σε πελάτες, company profiles. Αποθηκεύεται αυτόματα στο uploads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Τίτλος παρουσίασης"},
+                    "slides_json": {"type": "string", "description": "JSON array slides: [{title, content, bullet_points:[]}]"},
+                    "filename": {"type": "string", "description": "Όνομα αρχείου (π.χ. presentation.pptx)"}
+                },
+                "required": ["title", "slides_json", "filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_word",
+            "description": "Αναζήτησε λέξη στα έγκυρα διαδικτυακά ελληνικά λεξικά (Λεξικό Τριανταφυλλίδη, greek-language.gr). ΧΡΗΣΙΜΟΠΟΙΗΣΕ το ΓΙΑ ΚΑΘΕ ΑΜΦΙΒΟΛΙΑ ορθογραφίας, γραμματικής, κλίσης, σημασίας, τονισμού, ετυμολογίας ή συντακτικού. Ιδανικό για να επιβεβαιώσεις τη σωστή γραφή λέξεων, ειδικά για λόγιο/επίσημο λεξιλόγιο, επιστημονικούς όρους, ξένες λέξεις, ομόηχα.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "word": {"type": "string", "description": "Η λέξη προς αναζήτηση (ελληνική ή ξένη)"}
+                },
+                "required": ["word"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_uploads",
+            "description": "Λίστα αρχείων που έχεις ανεβάσει ή έχει λάβει ο agent. Διαβάζει το uploads directory σου για να δεις ποια αρχεία είναι διαθέσιμα.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
 ]
 
 def resolve_path(path, agent_id=None):
     p = os.path.realpath(os.path.expanduser(path))
     if not os.path.isabs(p):
         p = os.path.realpath(os.path.join(AION_DIR, p))
-    allowed = [os.path.realpath(AION_DIR), os.path.realpath(os.path.expanduser("~/AION"))]
+    allowed = [os.path.realpath(AION_DIR)]
     if not any(p.startswith(root + "/") or p == root for root in allowed):
         raise PermissionError(f"Access denied: {p} is outside AION directory")
     return p
@@ -609,7 +694,7 @@ def parse_xml_tool_calls(text):
 def find_uploaded_file(fname):
     """Search for a file across all agent upload directories."""
     from agents import AGENTS
-    upload_base = os.path.join(os.path.expanduser("~/AION"), "aionclaw", "uploads")
+    upload_base = str(UPLOADS_DIR)
     for a in AGENTS + [{"id": "ceo"}]:
         candidate = os.path.join(upload_base, a["id"], fname)
         if os.path.exists(candidate):
@@ -772,7 +857,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 lines.append(f"{k}: {val}")
             return "\n".join(lines)
         elif name == "read_leads":
-            leads_file = os.path.join(AION_DIR, "AION_CONNECT_CRM", "leads", "leads-database.json")
+            leads_file = str(LEADS_FILE)
             try:
                 with open(leads_file) as f:
                     data = json.load(f)
@@ -791,7 +876,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             except Exception as e:
                 return f"Error reading leads: {e}"
         elif name == "save_lead":
-            leads_dir = os.path.join(AION_DIR, "AION_CONNECT_CRM", "leads")
+            leads_dir = str(CRM_DIR / "leads")
             leads_file = os.path.join(leads_dir, "leads-database.json")
             os.makedirs(leads_dir, exist_ok=True)
             try:
@@ -864,7 +949,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 "started_at": started_at,
                 "ts": datetime.now().isoformat(),
             })
-            result = run_sub_agent(agent_id, task, context)
+            result = run_sub_agent(agent_id, task, context, format=args.get("format", "compact"))
             duration = time.time() - PERF_START.pop(f"delegate_{agent_id}", time.time())
             # Progress: done
             bus.broadcast({
@@ -905,13 +990,13 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 aid = d["agent_id"]
                 if aid not in known_ids:
                     return f"❌ Ο agent '{aid}' ΔΕΝ υπάρχει στο σύστημα. Διαθέσιμοι: {', '.join(sorted(known_ids))}"
-                validated.append((aid, d["task"], d.get("context", "")))
-            bus.log("ceo", ", ".join(a for a,_,_ in validated), "parallel_delegate", f"Παράλληλη ανάθεση σε {len(validated)} agents")
+                validated.append((aid, d["task"], d.get("context", ""), d.get("format", "compact")))
+            bus.log("ceo", ", ".join(a for a,_,_,_ in validated), "parallel_delegate", f"Παράλληλη ανάθεση σε {len(validated)} agents")
             total = len(validated)
             results = {}
             with ThreadPoolExecutor(max_workers=total) as pool:
                 fut_map = {}
-                for aid, task, ctx in validated:
+                for aid, task, ctx, fmt in validated:
                     bus.status(aid, True, "writing")
                     bus.broadcast({
                         "type": "agent_thinking",
@@ -919,7 +1004,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                         "status": "started",
                         "thought": f"🚀 {aid}: ξεκινά παράλληλα με {total} agents"
                     })
-                    fut = pool.submit(run_sub_agent, aid, task, ctx)
+                    fut = pool.submit(run_sub_agent, aid, task, ctx, format=fmt)
                     fut_map[fut] = (aid, task)
                 for fut in as_completed(fut_map):
                     aid, task = fut_map[fut]
@@ -976,7 +1061,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 "started_at": started_at,
                 "ts": datetime.now().isoformat(),
             })
-            result = run_sub_agent(to_agent, task_with_context)
+            result = run_sub_agent(to_agent, task_with_context, format=args.get("format", "compact"))
             duration = time.time() - PERF_START.pop(f"send_{to_agent}", time.time())
             bus.status(to_agent, False, "has_response")
             save_to_agent_session(to_agent, "default", f"Από CEO: {msg}", result)
@@ -1007,7 +1092,7 @@ def _execute_tool_impl(name, args, agent_id="agent"):
                 else:
                     return f"File not found: {args['file_path']}"
             dest_name = args.get("rename") or os.path.basename(src)
-            dest_dir = os.path.join(os.path.expanduser("~/AION"), "aionclaw", "uploads", to_agent)
+            dest_dir = os.path.join(str(UPLOADS_DIR), to_agent)
             os.makedirs(dest_dir, exist_ok=True)
             dest = os.path.join(dest_dir, dest_name)
             import shutil
@@ -1045,15 +1130,76 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             project = args.get("project", "")
             results = query_knowledge(project=project if project else None, query=q)
             return format_kb_results(results, q)
+        elif name == "lookup_word":
+            word = args["word"].strip()
+            if not word:
+                return "Δώσε μια λέξη προς αναζήτηση."
+            try:
+                safe_word = requests.utils.quote(word)
+                # Try Triantafyllidis dictionary
+                url = f"https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/search.html?lq={safe_word}"
+                resp = requests.get(url, timeout=15, headers={"User-Agent": "AIONCLAW/1.0"})
+                if resp.status_code == 200:
+                    html = resp.text
+                    # Find <div id="lemmas"> then extract <dl><dt> blocks
+                    lemmas_match = _re.search(r'<div id="lemmas">(.*?)</div>\s*<form', html, _re.DOTALL)
+                    if lemmas_match:
+                        lemma_html = lemmas_match.group(1)
+                        dt_blocks = _re.findall(r'<dt>(.*?)</dt>', lemma_html, _re.DOTALL)
+                        texts = []
+                        for dt in dt_blocks[:3]:
+                            text = _re.sub(r'<[^>]+>', ' ', dt)
+                            text = _re.sub(r'\s+', ' ', text).strip()
+                            if text and len(text) > 10:
+                                texts.append(text[:500])
+                        if texts:
+                            result = f"📖 Λεξικό Τριανταφυλλίδη — «{word}»:\n" + "\n\n".join(texts)
+                            result += f"\n\n🔗 {url}"
+                            return result
+                # Try Academy of Athens dictionary as fallback
+                aa_url = f"https://christikolexiko.academyofathens.gr/index.php/anazitisi?st={safe_word}"
+                aa_resp = requests.get(aa_url, timeout=15, headers={"User-Agent": "AIONCLAW/1.0"})
+                if aa_resp.status_code == 200:
+                    aa_html = aa_resp.text
+                    # Try various result containers
+                    for pattern in [r'<div class="lexicon-result-item">(.*?)</div>',
+                                    r'<div[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)</div>']:
+                        aa_blocks = _re.findall(pattern, aa_html, _re.DOTALL)
+                        if aa_blocks:
+                            texts = []
+                            for b in aa_blocks[:3]:
+                                text = _re.sub(r'<[^>]+>', ' ', b)
+                                text = _re.sub(r'\s+', ' ', text).strip()
+                                if text and len(text) > 10:
+                                    texts.append(text[:500])
+                            if texts:
+                                result = f"📖 Χρηστικό Λεξικό Ακαδημίας Αθηνών — «{word}»:\n" + "\n\n".join(texts)
+                                result += f"\n\n🔗 {aa_url}"
+                                return result
+                return f"Δεν βρέθηκε αποτέλεσμα για «{word}» στα λεξικά. Δοκίμασε διαφορετική γραφή.\n🔗 Λεξικό Τριανταφυλλίδη: {url}\n🔗 Ακαδημία Αθηνών: {aa_url}"
+            except Exception as e:
+                return f"Σφάλμα αναζήτησης για «{word}»: {e}\n🔗 Λεξικό Τριανταφυλλίδη: https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/search.html?lq={word.replace(' ', '%20')}"
+        elif name == "list_uploads":
+            upload_dir = os.path.join(str(UPLOADS_DIR), agent_id)
+            if not os.path.isdir(upload_dir):
+                return f"Δεν υπάρχουν ανεβασμένα αρχεία για τον agent '{agent_id}'."
+            files = []
+            for f in sorted(os.listdir(upload_dir)):
+                fpath = os.path.join(upload_dir, f)
+                size = os.path.getsize(fpath)
+                mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M")
+                files.append(f"  {f} ({size:,} bytes, {mtime})")
+            header = f"Αρχεία uploads για {agent_id} ({len(files)}):"
+            return "\n".join([header] + files)
         elif name == "get_agent_history":
             target = args.get("agent", "")
             import glob
-            session_dir = os.path.join(AION_DIR, "aionclaw", "sessions")
+            session_dir = str(SESSIONS_DIR)
             # Search all project dirs for this agent's session files
             history_lines = []
             for root, _dirs, files in os.walk(session_dir):
                 for fname in sorted(files):
-                    if fname.startswith(f"{target}:") and fname.endswith(".json"):
+                    if fname.startswith(f"{target}_") and fname.endswith(".json") and ":" not in fname:
                         fpath = os.path.join(root, fname)
                         try:
                             with open(fpath) as f:
@@ -1069,6 +1215,153 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             if not history_lines:
                 return f"Δεν βρέθηκε ιστορικό για τον agent '{target}'"
             return "Τελευταία μηνύματα:\n" + "\n".join(history_lines[-20:])
+        elif name == "generate_docx":
+            from collaboration import bus
+            from docx import Document
+            from docx.shared import Pt, Inches, Cm, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.table import WD_TABLE_ALIGNMENT
+            doc = Document()
+            style = doc.styles['Normal']
+            style.font.name = 'Calibri'
+            style.font.size = Pt(11)
+            title = args.get("title", "Έγγραφο")
+            p = doc.add_heading(title, level=0)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            sections = json.loads(args.get("sections_json", "[]"))
+            for sec in sections:
+                if sec.get("heading"):
+                    doc.add_heading(sec["heading"], level=1)
+                if sec.get("content"):
+                    doc.add_paragraph(sec["content"])
+                if sec.get("table"):
+                    tbl = sec["table"]
+                    rows = [tbl.get("headers", [])] + tbl.get("rows", [])
+                    if rows:
+                        table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+                        table.style = 'Light Grid Accent 1'
+                        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                        for ri, row_data in enumerate(rows):
+                            for ci, val in enumerate(row_data):
+                                cell = table.cell(ri, ci)
+                                cell.text = str(val)
+                                if ri == 0:
+                                    for paragraph in cell.paragraphs:
+                                        for run in paragraph.runs:
+                                            run.bold = True
+                if sec.get("list"):
+                    for item in sec["list"]:
+                        doc.add_paragraph(item, style='List Bullet')
+            doc.add_paragraph("")
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            run = p.add_run(f"Generated by AIONCLAW — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            run.font.size = Pt(8)
+            run.font.color.rgb = RGBColor(128, 128, 128)
+            fname = args.get("filename", "report.docx")
+            out = os.path.join(str(UPLOADS_DIR), agent_id, fname)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            doc.save(out)
+            fsize = os.path.getsize(out)
+            link = f"/api/files/download?path={AION_DIR}/aionclaw/uploads/{agent_id}/{fname}"
+            from collaboration import bus
+            bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": fname})
+            return f"✅ Word αρχείο: {fname} ({fsize:,} bytes)\n📎 Σύνδεσμος: {link}"
+        elif name == "generate_xlsx":
+            from collaboration import bus
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            wb = openpyxl.Workbook()
+            wb.remove(wb.active)
+            sheets = json.loads(args.get("sheets_json", "[]"))
+            for si, sh in enumerate(sheets):
+                ws = wb.create_sheet(title=sh.get("name", f"Sheet{si+1}"))
+                header_font = Font(bold=True, color="FFFFFF", size=11)
+                header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                thin_border = Border(
+                    left=Side(style='thin'), right=Side(style='thin'),
+                    top=Side(style='thin'), bottom=Side(style='thin'))
+                headers = sh.get("headers", [])
+                if headers:
+                    for ci, h in enumerate(headers, 1):
+                        cell = ws.cell(row=1, column=ci, value=h)
+                        cell.font = header_font
+                        cell.fill = header_fill
+                        cell.alignment = Alignment(horizontal='center')
+                        cell.border = thin_border
+                for ri, row in enumerate(sh.get("rows", []), 2 if headers else 1):
+                    for ci, val in enumerate(row, 1):
+                        cell = ws.cell(row=ri, column=ci, value=val)
+                        cell.border = thin_border
+                        cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, (len(headers) or 1) + 1):
+                    ws.column_dimensions[get_column_letter(ci)].width = 18
+            fname = args.get("filename", "data.xlsx")
+            out = os.path.join(str(UPLOADS_DIR), agent_id, fname)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            wb.save(out)
+            fsize = os.path.getsize(out)
+            link = f"/api/files/download?path={AION_DIR}/aionclaw/uploads/{agent_id}/{fname}"
+            bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": fname})
+            return f"✅ Excel αρχείο: {fname} ({fsize:,} bytes)\n📎 Σύνδεσμος: {link}"
+        elif name == "generate_pptx":
+            from collaboration import bus
+            from pptx import Presentation
+            from pptx.util import Inches, Pt
+            from pptx.dml.color import RGBColor as PptRGB
+            from pptx.enum.text import PP_ALIGN
+            prs = Presentation()
+            prs.slide_width = Inches(13.333)
+            prs.slide_height = Inches(7.5)
+            title = args.get("title", "Παρουσίαση")
+            slides = json.loads(args.get("slides_json", "[]"))
+            for si, slide_data in enumerate(slides):
+                if si == 0:
+                    slide = prs.slides.add_slide(prs.slide_layouts[6])
+                    bg = slide.background
+                    fill = bg.fill
+                    fill.solid()
+                    fill.fore_color.rgb = PptRGB(44, 62, 80)
+                    txBox = slide.shapes.add_textbox(Inches(1), Inches(2.5), Inches(11), Inches(2))
+                    tf = txBox.text_frame
+                    p = tf.paragraphs[0]
+                    p.text = slide_data.get("title", title)
+                    p.font.size = Pt(44)
+                    p.font.color.rgb = PptRGB(255, 255, 255)
+                    p.alignment = PP_ALIGN.CENTER
+                    if slide_data.get("content"):
+                        p2 = tf.add_paragraph()
+                        p2.text = slide_data["content"]
+                        p2.font.size = Pt(20)
+                        p2.font.color.rgb = PptRGB(200, 200, 200)
+                        p2.alignment = PP_ALIGN.CENTER
+                else:
+                    slide = prs.slides.add_slide(prs.slide_layouts[1])
+                    title_shape = slide.shapes.title
+                    title_shape.text = slide_data.get("title", f"Slide {si+1}")
+                    content = slide_data.get("content", "")
+                    bullets = slide_data.get("bullet_points", [])
+                    if content or bullets:
+                        body = slide.placeholders[1]
+                        tf = body.text_frame
+                        if content:
+                            p = tf.paragraphs[0]
+                            p.text = content
+                            p.font.size = Pt(16)
+                        for b in bullets:
+                            p = tf.add_paragraph()
+                            p.text = b
+                            p.font.size = Pt(14)
+                            p.level = 0
+            fname = args.get("filename", "presentation.pptx")
+            out = os.path.join(str(UPLOADS_DIR), agent_id, fname)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            prs.save(out)
+            fsize = os.path.getsize(out)
+            link = f"/api/files/download?path={AION_DIR}/aionclaw/uploads/{agent_id}/{fname}"
+            bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": fname})
+            return f"✅ PowerPoint αρχείο: {fname} ({fsize:,} bytes)\n📎 Σύνδεσμος: {link}"
         return f"Unknown tool: {name}"
     except subprocess.TimeoutExpired as e:
         raise e

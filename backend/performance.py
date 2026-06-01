@@ -1,7 +1,8 @@
 import json, os
 from datetime import datetime
+from config import MEMORY_DIR
 
-PERF_FILE = os.path.join(os.path.expanduser("~/AION"), "MEMORY", "performance.json")
+PERF_FILE = str(MEMORY_DIR / "performance.json")
 
 TIME_ESTIMATES = {
     "dev": 30, "leadfinder": 25, "sales": 20, "marketing": 20, "support": 15,

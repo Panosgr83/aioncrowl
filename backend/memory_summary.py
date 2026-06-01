@@ -2,23 +2,23 @@ import json, os, time
 from datetime import datetime
 from pathlib import Path
 from kb import _get_current_project
+from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR
 
 SUMMARY_THRESHOLD = 6
-SESSION_DIR = os.path.join(str(Path.home()), "AION", "aionclaw", "sessions")
 
 def _get_memory_path(project=None, must_exist=True):
     if project:
-        path = Path.home() / "AION" / "MEMORY" / project / "memory.json"
+        path = MEMORY_DIR / project / "memory.json"
         if not must_exist or path.exists():
             return str(path)
-    return str(Path.home() / "AION" / "MEMORY" / "memory.json")
+    return str(MEMORY_DIR / "memory.json")
 
 def _get_sessions_dir(project=None):
     if project:
-        pdir = Path(SESSION_DIR) / project
+        pdir = SESSIONS_DIR / project
         if pdir.exists():
             return str(pdir)
-    return SESSION_DIR
+    return str(SESSIONS_DIR)
 
 def load_memory(project=None):
     path = _get_memory_path(project)

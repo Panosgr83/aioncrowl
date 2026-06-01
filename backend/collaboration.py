@@ -1,9 +1,9 @@
 import json, os, uuid, asyncio, time as time_module
 from datetime import datetime
+from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, COLLAB_LOG
 
-AION_DIR = os.path.expanduser("~/AION")
-MEMORY_FILE = os.path.join(AION_DIR, "MEMORY", "memory.json")
-SESSION_DIR = os.path.join(AION_DIR, "aionclaw", "sessions")
+SESSION_DIR = str(SESSIONS_DIR)
+MEMORY_FILE = str(MEMORY_DIR / "memory.json")
 
 class AgentBus:
     def __init__(self):
@@ -50,7 +50,7 @@ class AgentBus:
 
     def _persist(self, entry):
         try:
-            path = os.path.join(AION_DIR, "MEMORY", "collab_log.json")
+            path = str(COLLAB_LOG)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             log = []
             if os.path.exists(path):
@@ -65,7 +65,7 @@ class AgentBus:
             pass
 
     def get_task_log(self, task_id):
-        path = os.path.join(AION_DIR, "MEMORY", "collab_log.json")
+        path = str(COLLAB_LOG)
         try:
             if os.path.exists(path):
                 with open(path) as f:
@@ -78,19 +78,9 @@ class AgentBus:
 bus = AgentBus()
 
 def save_to_agent_session(agent_id, session_id, user_msg, assistant_msg):
-    """Save a user+assistant exchange to an agent's session file."""
     full_key = f"{agent_id}:{session_id}"
     safe = full_key.replace(":", "_").replace("/", "_")
-    # Get current project
-    project = "default"
-    try:
-        pf = os.path.join(AION_DIR, "MEMORY", "project.json")
-        if os.path.exists(pf):
-            with open(pf) as f:
-                pd = json.load(f)
-                project = pd.get("current", "default")
-    except: pass
-    pdir = os.path.join(SESSION_DIR, project)
+    pdir = os.path.join(SESSION_DIR, "default")
     fpath = os.path.join(pdir, f"{safe}.json")
     os.makedirs(pdir, exist_ok=True)
     try:
@@ -102,11 +92,11 @@ def save_to_agent_session(agent_id, session_id, user_msg, assistant_msg):
         existing.append({"role": "user", "content": user_msg, "_aid": agent_id, "_sid": session_id})
         existing.append({"role": "assistant", "content": assistant_msg, "_aid": agent_id, "_sid": session_id})
         with open(fpath, "w") as f:
-            json.dump({"messages": existing}, f, indent=2, ensure_ascii=False)
+            json.dump({"messages": existing}, f, ensure_ascii=False)
     except:
         pass
 
-def run_sub_agent(agent_id, task, context="", engine_override=""):
+def run_sub_agent(agent_id, task, context="", engine_override="", format="compact"):
     from agents import AGENTS, get_agent
     from engine import get_active_engines, call_engine, ENGINES, suggest_engine_for, record_engine_perf
     from tools import TOOL_DEFINITIONS, get_tool_definitions_for_agent, execute_tool
@@ -133,25 +123,26 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
         "ts": datetime.now().isoformat(),
     })
 
-    greek_lang = "ΓΡΑΨΕ ΣΕ ΣΩΣΤΑ ΕΛΛΗΝΙΚΑ: χρησιμοποίησε σωστή γραμματική, συντακτικό και ορθογραφία. Απόφυγε αγγλισμούς. Οι προτάσεις να έχουν νόημα και ροή."
-    system_prompt = f"""Είσαι ο {agent['name']}.
+    if format == "full":
+        greek_lang = "ΓΡΑΨΕ ΣΕ ΑΡΙΣΤΑ ΣΥΓΧΡΟΝΑ ΕΛΛΗΝΙΚΑ — φυσικά, καθαρά, με σωστή γραμματική και ορθογραφία."
+        system_prompt = f"""Είσαι ο {agent['name']}.
 {agent['system_prompt']}
 
 {greek_lang}
 
-Σου ανατέθηκε μια εργασία από τον CEO.
-Εργασία: {task}
-
-Πρόσθετο context: {context if context else '(κανένα)'}
-
+TASK: {task}
+CONTEXT: {context or '-'}
 Απάντησε πλήρως και με λεπτομέρειες. Χρησιμοποίησε τα εργαλεία σου όπου χρειάζεται."""
+    else:
+        system_prompt = f"""{agent['system_prompt']}
+TASK:{task} | CONTEXT:{context or '-'} | TOOLS:execute"""
 
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": task}]
 
     task_type = "general"
     if agent_id in ("dev", "analytics", "security"):
         task_type = "coding"
-    elif agent_id in ("consultant", "ceo", "memory", "pm"):
+    elif agent_id in ("consultant", "ceo", "memory", "pm", "offers", "content", "docsagent"):
         task_type = "reasoning"
     elif agent_id in ("leadfinder", "marketing", "sales") or "απλ" in task.lower():
         task_type = "simple"
@@ -181,117 +172,63 @@ def run_sub_agent(agent_id, task, context="", engine_override=""):
                        "imggen": 4, "seo": 3, "offers": 3, "pm": 3, "consultant": 3, "content": 3, "docsagent": 3}
     total_steps = step_estimates.get(agent_id, 3)
 
-    # Compare: skip two-call for simple agents
+    # Single-call for ALL agents: tools bundled in first call, no separate planning step
     is_simple_task = task_type == "simple" or (len(task) < 200 and not any(w in task for w in ["γράψε", "δημιούργησε", "ανέλυσε", "βρες", "run", "write", "create", "search"]))
 
-    for engine in engines_to_try:
+    for engine in engines_to_try[:5]:
         try:
             t0 = time_module.time()
             agent_tools = get_tool_definitions_for_agent(agent_id)
 
-            # Simple agents: single-call optimization (skip tool planning)
-            if is_simple_task and agent_tools:
-                resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type="simple")
-                t1 = time_module.time()
-                record_engine_perf(engine["id"], t1 - t0, True)
-                data = resp.json()
-                choice = data["choices"][0]
-                msg = choice["message"]
-                text = msg.get("content", "")
+            resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type=task_type)
+            t1 = time_module.time()
+            record_engine_perf(engine["id"], t1 - t0, True)
+            data = resp.json()
+            choice = data["choices"][0]
+            msg = choice["message"]
+            text = msg.get("content", "")
 
-                tool_calls = msg.get("tool_calls")
-                if not tool_calls:
-                    from tools import parse_xml_tool_calls
-                    tool_calls, cleaned = parse_xml_tool_calls(text)
-                    if tool_calls:
-                        text = cleaned
-
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                from tools import parse_xml_tool_calls
+                tool_calls, cleaned = parse_xml_tool_calls(text)
                 if tool_calls:
-                    num_tools = len(tool_calls)
-                    for i, tc in enumerate(tool_calls):
-                        done_steps += 1
-                        pct = min(int(done_steps / total_steps * 100), 95)
-                        if isinstance(tc, dict):
-                            fn = tc.get("function", {}).get("name", "")
-                            fa = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                            tid = tc.get("id", "")
-                        else:
-                            fn = tc.function.name
-                            fa = json.loads(tc.function.arguments)
-                            tid = tc.id
+                    text = cleaned
 
-                        remaining = max(1, int(estimated_seconds * (1 - done_steps / total_steps)))
-                        bus.broadcast({
-                            "type": "task_progress",
-                            "agent_id": agent_id,
-                            "status": "running",
-                            "progress": pct,
-                            "message": f"🔧 {agent_id}: {fn} ({i+1}/{num_tools})",
-                            "estimated_seconds": estimated_seconds,
-                            "remaining_seconds": remaining,
-                            "started_at": started_at,
-                            "ts": datetime.now().isoformat(),
-                        })
-                        bus.broadcast({
-                            "type": "agent_thinking",
-                            "agent_id": agent_id,
-                            "status": "thinking",
-                            "thought": f"💭 {agent_icon} {agent['name']}: εκτελεί {fn} ({i+1}/{num_tools})",
-                            "estimated_seconds": estimated_seconds,
-                            "remaining_seconds": remaining,
-                            "started_at": started_at,
-                            "ts": datetime.now().isoformat(),
-                        })
-                        bus.broadcast({
-                            "type": "agent_tool_step",
-                            "agent_id": agent_id,
-                            "tool": fn,
-                            "args_preview": str(list(fa.keys()))[:100] if fa else "",
-                            "status": "started",
-                            "ts": datetime.now().isoformat(),
-                        })
-                        result = execute_tool(fn, fa)
-                        bus.broadcast({
-                            "type": "agent_tool_step",
-                            "agent_id": agent_id,
-                            "tool": fn,
-                            "status": "done",
-                            "ts": datetime.now().isoformat(),
-                        })
-                        messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
-                        messages.append({"role": "tool", "content": result, "tool_call_id": tid})
+            if tool_calls:
+                for i, tc in enumerate(tool_calls):
+                    done_steps += 1
+                    pct = min(int(done_steps / total_steps * 100), 95)
+                    if isinstance(tc, dict):
+                        fn = tc.get("function", {}).get("name", "")
+                        fa = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        tid = tc.get("id", "")
+                    else:
+                        fn = tc.function.name
+                        fa = json.loads(tc.function.arguments)
+                        tid = tc.id
+                    remaining = max(1, int(estimated_seconds * (1 - done_steps / total_steps)))
+                    bus.broadcast({"type": "task_progress", "agent_id": agent_id, "status": "running", "progress": pct, "message": f"🔧 {agent_id}: {fn} ({i+1}/{len(tool_calls)})", "estimated_seconds": estimated_seconds, "remaining_seconds": remaining, "started_at": started_at, "ts": datetime.now().isoformat()})
+                    bus.broadcast({"type": "agent_thinking", "agent_id": agent_id, "status": "thinking", "thought": f"💭 {agent_icon} {agent['name']}: {fn}", "estimated_seconds": estimated_seconds, "remaining_seconds": remaining, "started_at": started_at, "ts": datetime.now().isoformat()})
+                    bus.broadcast({"type": "agent_tool_step", "agent_id": agent_id, "tool": fn, "args_preview": str(list(fa.keys()))[:100] if fa else "", "status": "started", "ts": datetime.now().isoformat()})
+                    result = execute_tool(fn, fa)
+                    bus.broadcast({"type": "agent_tool_step", "agent_id": agent_id, "tool": fn, "status": "done", "ts": datetime.now().isoformat()})
+                    messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
+                    messages.append({"role": "tool", "content": result, "tool_call_id": tid})
 
-                    bus.broadcast({
-                        "type": "agent_thinking",
-                        "agent_id": agent_id,
-                        "status": "synthesizing",
-                        "thought": f"🧠 {agent_icon} {agent['name']}: συνθέτει αποτελέσματα...",
-                        "estimated_seconds": estimated_seconds,
-                        "started_at": started_at,
-                        "ts": datetime.now().isoformat(),
-                    })
-                    t2 = time_module.time()
-                    final_resp = call_engine(engine, messages, stream=False, task_type="simple")
-                    t3 = time_module.time()
-                    record_engine_perf(engine["id"], t3 - t2, True)
+                # Synthesis call only for non-simple tasks that used tools
+                if not is_simple_task and tool_calls:
+                    bus.broadcast({"type": "agent_thinking", "agent_id": agent_id, "status": "synthesizing", "thought": f"🧠 {agent_icon} {agent['name']}: συνθέτει...", "estimated_seconds": estimated_seconds, "started_at": started_at, "ts": datetime.now().isoformat()})
+                    final_resp = call_engine(engine, messages, stream=False, task_type=task_type)
                     final_data = final_resp.json()
                     text = final_data["choices"][0]["message"].get("content", "")
 
-                tool_count = len(tool_calls) if tool_calls else 0
-                duration = time_module.time() - start_time
-                log_performance(agent_id, task, duration, engine["id"], True, tool_calls=tool_count)
-                bus.engine_cache[agent_id] = engine["id"]
-                bus.broadcast({
-                    "type": "agent_thinking",
-                    "agent_id": agent_id,
-                    "status": "complete",
-                    "thought": f"✅ {agent_icon} {agent['name']} ολοκλήρωσε σε {duration:.1f}s",
-                    "estimated_seconds": estimated_seconds,
-                    "duration_s": round(duration, 1),
-                    "started_at": started_at,
-                    "ts": datetime.now().isoformat(),
-                })
-                return text
+            tool_count = len(tool_calls) if tool_calls else 0
+            duration = time_module.time() - start_time
+            log_performance(agent_id, task, duration, engine["id"], True, tool_calls=tool_count)
+            bus.engine_cache[agent_id] = engine["id"]
+            bus.broadcast({"type": "agent_thinking", "agent_id": agent_id, "status": "complete", "thought": f"✅ {agent_icon} {agent['name']} ολοκλήρωσε σε {duration:.1f}s", "estimated_seconds": estimated_seconds, "duration_s": round(duration, 1), "started_at": started_at, "ts": datetime.now().isoformat()})
+            return text
 
             # Normal two-call flow for complex agents
             resp = call_engine(engine, messages, tools=agent_tools, stream=False, task_type=task_type)

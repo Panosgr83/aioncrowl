@@ -2,9 +2,9 @@ import json, os, time
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from config import MEMORY_DIR
 
-AION_DIR = os.path.expanduser("~/AION")
-JOBS_FILE = os.path.join(AION_DIR, "MEMORY", "scheduled_jobs.json")
+JOBS_FILE = str(MEMORY_DIR / "scheduled_jobs.json")
 
 _scheduler = None
 

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -16,8 +16,8 @@ from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
 from collaboration import bus
 from scheduler import start_scheduler, get_jobs, add_job, delete_job, toggle_job, run_job_now
+from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, UPLOADS_DIR as CFG_UPLOADS_DIR, COLLAB_LOG, LEADS_FILE, DOTENV_FILE, PROJECT_FILE as CFG_PROJECT_FILE
 
-AION_DIR = os.path.expanduser("~/AION")
 MAX_TOOL_ITER = 5
 
 sessions = {}
@@ -61,21 +61,26 @@ async def auth_middleware(request: Request, call_next):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
-GREEK_LANG = """ΓΡΑΨΕ ΣΕ ΣΩΣΤΑ ΕΛΛΗΝΙΚΑ:
-- Χρησιμοποίησε σωστή γραμματική, συντακτικό, τονισμό και ορθογραφία
-- Απόφυγε αγγλισμούς και λέξεις-φαντάσματα
-- Οι προτάσεις να έχουν νόημα και ροή
-- Σεβασύ τις ελληνικές καταλήξεις (π.χ. -ος, -ης, -α, -ο, -ου, -ων)"""
+GREEK_LANG = """ΓΡΑΨΕ ΣΕ ΑΡΙΣΤΑ ΣΥΓΧΡΟΝΑ ΕΛΛΗΝΙΚΑ — ΦΥΣΙΚΑ, ΚΑΘΑΡΑ, ΜΕ ΥΦΟΣ:
 
-SYSTEM_PROMPT = f"""Είσαι ο AION CEO Agent, το κεντρικό AI σύστημα της AION Web Solutions.
-{GREEK_LANG}
-Είσαι ένα expert AI agent που μπορείς να χρησιμοποιείς εργαλεία για να:
-- Διαβάζεις και γράφεις αρχεία
-- Εκτελείς commands
-- Ψάχνεις στο web
-- Αποθηκεύεις πληροφορίες στη μνήμη
+ΟΡΘΟΓΡΑΦΙΑ & ΓΡΑΜΜΑΤΙΚΗ:
+- Απόλυτα σωστή ορθογραφία, τονισμό, γραμματική, συντακτικό. Αν έχεις αμφιβολία, ΚΑΛΕΣΕ lookup_word.
+- Σωστή κλίση ουσιαστικών, επιθέτων, ρημάτων. Προσοχή στη γενική πληθυντικού.
 
-Πάντα να χρησιμοποιείς τα εργαλεία όταν χρειάζεται, αντί να λες ότι δεν μπορείς να κάνεις κάτι."""
+ΛΕΞΙΛΟΓΙΟ:
+- Πλούσιο, ποικίλο, ακριβές, φυσικό. Απόφυγε επαναλήψεις και κοινοτοπίες.
+- Σύγχρονη νεοελληνική — όχι αρχαΐζουσες λέξεις ή ψευτολόγιο (όχι «ουχί», «άνευ», «ειρήσθω εν παρόδω»).
+- Απόφυγε αγγλισμούς και μηχανικές μεταφράσεις. Προτίμησε φυσικές ελληνικές εκφράσεις.
+- Παραδείγματα: «μπορώ να» (όχι «δύναμαι να»), «χρειάζεται» (όχι «χρήζει»), «γίνεται» (όχι «καθίσταται»), «πολύ» (όχι «λίαν»), «θέλω» (όχι «επιθυμώ»).
+
+ΥΦΟΣ & ΡΟΗ:
+- Φυσική ροή, ποικιλία προτάσεων, σαφήνεια. Γράψε όπως θα έγραφε ένας άρτια καταρτισμένος επαγγελματίας.
+- Ανάλογα το κοινό: επίσημο αλλά όχι ψυχρό, φιλικό αλλά όχι οικείο.
+
+ΕΡΓΑΛΕΙΑ:
+- lookup_word: για κάθε αμφιβολία ορθογραφίας, σημασίας, κλίσης.
+- Λεξικό Τριανταφυλλίδη: https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/
+- Χρηστικό Λεξικό Ακαδημίας Αθηνών: https://christikolexiko.academyofathens.gr/"""
 
 class ChatRequest(BaseModel):
     message: str
@@ -172,7 +177,7 @@ class AgentContext:
         if role == "user":
             self.message_count += 1
 
-MAX_CONTEXT_MSGS = 12
+MAX_CONTEXT_MSGS = 6
 
 def sanitize_messages(messages):
     """Remove unsupported fields (ts, etc.) before sending to API."""
@@ -347,7 +352,15 @@ async def health():
 
 @app.get("/api/engines")
 async def engines():
-    return {"engines": get_engine_status()}
+    from engine import get_active_engines, ENGINES
+    active = get_active_engines()
+    status_map = {e["id"]: e for e in ENGINES}
+    result = []
+    for e in active:
+        entry = dict(e)
+        entry["status"] = status_map.get(e["id"], {}).get("status", "active")
+        result.append(entry)
+    return {"engines": result}
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
@@ -386,7 +399,7 @@ async def clear_session(session_id: str):
 
 @app.get("/api/keys")
 async def list_keys():
-    env_path = os.path.join(AION_DIR, ".env")
+    env_path = str(DOTENV_FILE)
     keys = {}
     try:
         if os.path.exists(env_path):
@@ -416,7 +429,7 @@ async def update_key(data: dict):
     if not engine_id or not api_key:
         raise HTTPException(400, "engine_id and api_key required")
     os.environ[f"{engine_id.upper()}_API_KEY"] = api_key
-    env_path = os.path.join(AION_DIR, ".env")
+    env_path = str(DOTENV_FILE)
     try:
         existing = ""
         if os.path.exists(env_path):
@@ -436,7 +449,7 @@ async def update_key(data: dict):
 
 @app.get("/api/leads")
 async def get_leads():
-    leads_file = os.path.join(AION_DIR, "AION_CONNECT_CRM", "leads", "leads-database.json")
+    leads_file = str(LEADS_FILE)
     try:
         with open(leads_file) as f:
             data = json.load(f)
@@ -446,7 +459,7 @@ async def get_leads():
     except:
         return {"leads": [], "count": 0, "error": "leads database not found"}
 
-UPLOAD_DIR = os.path.join(AION_DIR, "aionclaw", "uploads")
+UPLOAD_DIR = str(CFG_UPLOADS_DIR)
 
 @app.post("/api/agents/{agent_id}/upload")
 async def upload_agent_file(agent_id: str, file: UploadFile = File(...)):
@@ -483,6 +496,7 @@ async def list_agent_files(agent_id: str):
                     "size": os.path.getsize(full),
                     "modified": datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
                     "source": agent_id,
+                    "path": full,
                 })
             except:
                 pass
@@ -499,6 +513,7 @@ async def list_agent_files(agent_id: str):
                             "size": os.path.getsize(full),
                             "modified": datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
                             "source": "ceo (shared)",
+                            "path": full,
                         })
                     except:
                         pass
@@ -535,7 +550,7 @@ def get_agent_file_names(agent_id):
 
 @app.get("/api/collab/history")
 async def collab_history():
-    path = os.path.join(AION_DIR, "MEMORY", "collab_log.json")
+    path = str(COLLAB_LOG)
     try:
         if os.path.exists(path):
             with open(path) as f:
@@ -547,7 +562,7 @@ async def collab_history():
 
 @app.post("/api/collab/clear")
 async def collab_clear():
-    path = os.path.join(AION_DIR, "MEMORY", "collab_log.json")
+    path = str(COLLAB_LOG)
     try:
         from collaboration import bus
         bus.history = []
@@ -575,7 +590,7 @@ async def collab_event_unread(event_id: str):
     mark_unread(event_id)
     return {"ok": True}
 
-PROJECT_FILE = os.path.join(AION_DIR, "MEMORY", "project.json")
+PROJECT_FILE = str(CFG_PROJECT_FILE)
 
 def _load_project():
     try:
@@ -661,7 +676,7 @@ async def delete_project(name: str):
     return {"ok": True}
 
 
-SESSION_DIR = os.path.join(AION_DIR, "aionclaw", "sessions")
+SESSION_DIR = str(SESSIONS_DIR)
 SESSION_CACHE = {}  # full_key -> {"messages": list, "ts": float}
 SESSION_CACHE_TTL = 1800  # 30 minutes
 
@@ -948,6 +963,72 @@ async def read_file(path: str):
     except Exception as e:
         raise HTTPException(400, f"Read error: {e}")
 
+@app.get("/api/files/download")
+async def download_file(path: str):
+    full = os.path.expanduser(path)
+    if not os.path.isfile(full):
+        raise HTTPException(400, f"File not found: {full}")
+    return FileResponse(full, filename=os.path.basename(full))
+
+@app.get("/api/files/zip")
+async def zip_files(path: str = None):
+    import shutil, io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        if path:
+            base = os.path.expanduser(path)
+            if os.path.isfile(base):
+                zf.write(base, os.path.basename(base))
+            elif os.path.isdir(base):
+                for root, _dirs, files in os.walk(base):
+                    for f in files:
+                        fpath = os.path.join(root, f)
+                        arcname = os.path.relpath(fpath, os.path.dirname(base))
+                        zf.write(fpath, arcname)
+        else:
+            uploads = UPLOAD_DIR
+            if os.path.isdir(uploads):
+                for root, _dirs, files in os.walk(uploads):
+                    for f in files:
+                        fpath = os.path.join(root, f)
+                        arcname = os.path.relpath(fpath, os.path.dirname(uploads))
+                        zf.write(fpath, arcname)
+    buf.seek(0)
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=aionclaw_files.zip"})
+
+@app.post("/api/files/upload")
+async def upload_file(agent_id: str = "ceo", file: UploadFile = None):
+    if not file:
+        raise HTTPException(400, "No file provided")
+    upload_dir = os.path.join(UPLOAD_DIR, agent_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    fpath = os.path.join(upload_dir, file.filename)
+    content = await file.read()
+    with open(fpath, "wb") as f:
+        f.write(content)
+    from collaboration import bus
+    bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": file.filename})
+    return {"status": "ok", "filename": file.filename, "size": len(content), "path": fpath}
+
+@app.get("/api/project/files")
+async def project_files():
+    import glob as _glob
+    files = []
+    uploads = UPLOAD_DIR
+    if os.path.isdir(uploads):
+        for root, _dirs, fnames in os.walk(uploads):
+            for f in fnames:
+                fpath = os.path.join(root, f)
+                rel = os.path.relpath(fpath, uploads)
+                agent = os.path.basename(os.path.dirname(fpath))
+                files.append({
+                    "name": f, "path": fpath, "agent": agent,
+                    "size": os.path.getsize(fpath),
+                    "modified": datetime.fromtimestamp(os.path.getmtime(fpath)).isoformat()
+                })
+    return {"files": files}
+
 @app.post("/api/tunnel/start")
 async def start_tunnel():
     from tunnel import start_tunnel as _start
@@ -970,229 +1051,238 @@ async def websocket_chat(ws: WebSocket):
     await ws.accept()
     client_id = str(uuid.uuid4())[:8]
     active_connections.add(ws)
+
+    async def _keepalive():
+        try:
+            while True:
+                await asyncio.sleep(25)
+                await ws.send_json({"type": "ka"})
+        except:
+            pass
+    ka_task = asyncio.create_task(_keepalive())
+
     print(f"WS client connected: {client_id}")
 
     try:
-        data = await ws.receive_json()
-        session_id = data.get("session_id", "default")
-        system_prompt = data.get("system_prompt", "")
-        tools_enabled = data.get("tools_enabled", True)
-        engine_override = data.get("engine_id", "")
-        agent_id = data.get("agent_id", "ceo")
+        while True:
+            data = await ws.receive_json()
+            session_id = data.get("session_id", "default")
+            system_prompt = data.get("system_prompt", "")
+            tools_enabled = data.get("tools_enabled", True)
+            engine_override = data.get("engine_id", "")
+            agent_id = data.get("agent_id", "ceo")
+            selected_agents = data.get("selected_agents", [])
 
-        def ws_send(msg):
-            msg["_aid"] = agent_id
-            msg["_sid"] = session_id.split(":", 1)[-1] if ":" in session_id else session_id
-            return ws.send_json(msg)
+            # If client specified agents, inject into system prompt
+            if selected_agents and len(selected_agents) > 0:
+                agent_list_str = ", ".join(selected_agents)
+                system_prompt = (system_prompt or "") + f"\n\nΟ ΧΡΗΣΤΗΣ ΕΠΕΛΕΞΕ ΤΟΥΣ ΑΚΟΛΟΥΘΟΥΣ AGENTS: {agent_list_str}. Χρησιμοποίησε ΜΟΝΟ αυτούς τους agents. Αν χρειαστείς βοήθεια, στείλε ΜΟΝΟ στους επιλεγμένους agents: {agent_list_str}. ΜΗΝ χρησιμοποιήσεις κανέναν άλλον agent."
 
-        ctx = sessions.get(session_id)
-        if not ctx:
-            ctx = AgentContext(system_prompt, tools_enabled, agent_id=agent_id, session_id=session_id)
-            sessions[session_id] = ctx
+            def ws_send(msg):
+                msg["_aid"] = agent_id
+                msg["_sid"] = session_id.split(":", 1)[-1] if ":" in session_id else session_id
+                return ws.send_json(msg)
 
-        ctx.add_message("user", data.get("message", ""))
-        bus.status(agent_id, True, "writing")
-        ws_start_time = time.time()
+            ctx = sessions.get(session_id)
+            if not ctx:
+                ctx = AgentContext(system_prompt, tools_enabled, agent_id=agent_id, session_id=session_id)
+                sessions[session_id] = ctx
 
-        # Broadcast agent thinking on chat start
-        bus.broadcast({
-            "type": "agent_thinking",
-            "agent_id": agent_id,
-            "status": "started",
-            "thought": f"🤔 {agent_id}: επεξεργάζεται το μήνυμά σας...",
-            "ts": datetime.now().isoformat(),
-        })
+            ctx.add_message("user", data.get("message", ""))
+            bus.status(agent_id, True, "writing")
+            ws_start_time = time.time()
 
-        if engine_override:
-            engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or []
-            if not engines_to_try:
-                engines_to_try = get_active_engines()
-        else:
-            task_type = "reasoning" if agent_id == "ceo" else ("simple" if not tools_enabled else "general")
-            suggested = suggest_engine_for(task_type, needs_tools=tools_enabled)
-            engines_to_try = get_active_engines(task_type=task_type, needs_tools=tools_enabled)
-            if suggested and suggested in engines_to_try:
-                engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
-            # Move cached engine to front if still active
-            cached_id = session_engine_cache.get(session_id)
-            if cached_id:
-                cached = next((e for e in ENGINES if e["id"] == cached_id), None)
-                if cached and cached in engines_to_try:
-                    engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
-
-        last_error = ""
-        response_text = ""
-        tool_calls_made = []
-        engine_used = "none"
-
-        for engine in engines_to_try:
-            if tools_enabled and not engine.get("supports_tools", False):
-                continue
-            try:
-                t0 = time.time()
-                engine_used = engine["id"]
-                await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
-                bus.broadcast({
-                    "type": "engine_call",
-                    "engine_id": engine["id"],
-                    "agent_id": agent_id,
-                    "status": "started",
-                    "ts": datetime.now().isoformat(),
-                })
-                bus.broadcast({
-                    "type": "agent_thinking",
-                    "agent_id": agent_id,
-                    "status": "started",
-                    "thought": f"⏳ {agent_id}: επεξεργάζεται μέσω {engine['id']}...",
-                    "ts": datetime.now().isoformat(),
-                })
-
-                tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
-
-                # Step 1: Non-streaming call to get tool calls
-                init_resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=False)
-                init_data = init_resp.json()
-                init_choice = init_data["choices"][0]
-                init_msg = init_choice["message"]
-                init_content = init_msg.get("content", "")
-
-                # Parse XML tool calls if engine uses XML format instead of OpenAI tools
-                tool_calls = init_msg.get("tool_calls")
-                if not tool_calls:
-                    from tools import parse_xml_tool_calls
-                    xml_tools, cleaned = parse_xml_tool_calls(init_content)
-                    if xml_tools:
-                        tool_calls = xml_tools
-                        init_content = cleaned
-
-                if tool_calls:
-                    # Send initial assistant message + tool_calls to frontend
-                    ctx.add_message("assistant", init_content, tool_calls=tool_calls)
-                    await ws_send({"type": "tool_calls", "tool_calls": tool_calls})
-
-                    total_tools = len(tool_calls)
-                    for ti, tc in enumerate(tool_calls):
-                        func_name = tc.get("function", {}).get("name", "")
-                        func_args = json.loads(tc.get("function", {}).get("arguments", "{}")) if tc.get("function", {}).get("arguments") else {}
-                        tc_id = tc.get("id", "")
-                        await ws_send({"type": "tool_start", "name": func_name, "args": func_args})
-                        bus.broadcast({
-                            "type": "task_progress",
-                            "agent_id": agent_id,
-                            "status": "running",
-                            "progress": min(int((ti + 1) / total_tools * 95), 95),
-                            "message": f"🔧 {func_name} ({ti+1}/{total_tools})",
-                            "ts": datetime.now().isoformat(),
-                        })
-                        bus.broadcast({
-                            "type": "agent_thinking",
-                            "agent_id": agent_id,
-                            "status": "thinking",
-                            "thought": f"💭 {agent_id}: εκτελεί {func_name} ({ti+1}/{total_tools})",
-                            "ts": datetime.now().isoformat(),
-                        })
-                        result = await asyncio.to_thread(execute_tool, func_name, func_args, ctx.agent_id)
-                        await ws_send({"type": "tool_result", "name": func_name, "result": result[:500]})
-                        ctx.add_message("tool", result, tool_call_id=tc_id)
-                        tool_calls_made.append({"name": func_name, "result": result[:200]})
-
-                    bus.broadcast({
-                        "type": "agent_thinking",
-                        "agent_id": agent_id,
-                        "status": "synthesizing",
-                        "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα...",
-                        "ts": datetime.now().isoformat(),
-                    })
-
-                    # Step 2: Stream the synthesis response
-                    t2 = time.time()
-                    syn_type = "reasoning" if agent_id == "ceo" else task_type
-                    syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024, task_type=syn_type)
-                    full_content = ""
-                    for line in syn_resp.iter_lines():
-                        if not line: continue
-                        if line.startswith(b"data: "):
-                            cs = line[6:].decode()
-                            if cs == "[DONE]": break
-                            try:
-                                chunk = json.loads(cs)
-                                d = chunk.get("choices", [{}])[0].get("delta", {})
-                                if d.get("content"):
-                                    full_content += d["content"]
-                                    await ws_send({"type": "delta", "content": d["content"]})
-                            except: continue
-                    record_engine_perf(engine["id"], time.time() - t2, True)
-                    response_text = full_content
-                    ctx.add_message("assistant", full_content)
-                else:
-                    # No tool calls — stream the initial content directly
-                    await ws_send({"type": "delta", "content": init_content, "ts": datetime.now().isoformat()})
-                    ctx.add_message("assistant", init_content)
-                    response_text = init_content
-
-                if needs_summary(ctx.messages):
-                    try:
-                        await summarize_conversation(call_engine, engine, trim_messages(ctx.messages), ctx.agent_id)
-                    except:
-                        pass
-                bus.status(agent_id, False, "has_response")
-                bus.broadcast({
-                    "type": "agent_thinking",
-                    "agent_id": agent_id,
-                    "status": "complete",
-                    "thought": f"✅ {agent_id} ολοκλήρωσε την απάντηση",
-                    "ts": datetime.now().isoformat(),
-                })
-                # Complete progress
-                if tool_calls_made:
-                    bus.broadcast({
-                        "type": "task_progress",
-                        "agent_id": agent_id,
-                        "status": "complete",
-                        "progress": 100,
-                        "message": f"✅ {agent_id} completed",
-                        "ts": datetime.now().isoformat(),
-                    })
-                bus.broadcast({
-                    "type": "agent_chat",
-                    "agent_id": agent_id,
-                    "session_id": session_id.split(":", 1)[-1] if ":" in session_id else session_id,
-                    "exchange": [
-                        {"role": "user", "content": data.get("message", ""), "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
-                        {"role": "assistant", "content": (response_text or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
-                    ]
-                })
-                session_engine_cache[session_id] = engine_used
-                await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})
-                # Log performance
-                try:
-                    from performance import log_performance
-                    perf_duration = time.time() - ws_start_time
-                    log_performance(agent_id, data.get("message",""), perf_duration, engine_used, True, tool_calls=len(tool_calls_made))
-                except: pass
-                break
-
-            except Exception as e:
-                last_error = f"[{engine['id']}] {e}"
-                record_engine_perf(engine["id"], 0, False)
-                error_lower = str(e).lower()
-                if "rate limit" in error_lower or "too large" in error_lower:
-                    mark_engine(engine["id"], "rate_limited", 300)
-                elif "quota" in error_lower or "billing" in error_lower:
-                    mark_engine(engine["id"], "quota_exhausted", 7200)
-                elif "timeout" in error_lower or "connection" in error_lower:
-                    mark_engine(engine["id"], "timeout", 120)
-                continue
-        else:
-            bus.status(agent_id, False, "failure")
+            # Broadcast agent thinking on chat start
             bus.broadcast({
                 "type": "agent_thinking",
                 "agent_id": agent_id,
-                "status": "error",
-                "thought": f"❌ {agent_id} απέτυχε: {last_error[:100]}",
+                "status": "started",
+                "thought": f"🤔 {agent_id}: επεξεργάζεται το μήνυμά σας...",
                 "ts": datetime.now().isoformat(),
             })
-            await ws_send({"type": "error", "message": f"Σφάλμα σε όλα τα engines: {last_error}"})
+
+            if engine_override:
+                engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or []
+                if not engines_to_try:
+                    engines_to_try = get_active_engines()
+            else:
+                task_type = "reasoning" if agent_id == "ceo" else ("simple" if not tools_enabled else "general")
+                suggested = suggest_engine_for(task_type, needs_tools=tools_enabled)
+                engines_to_try = get_active_engines(task_type=task_type, needs_tools=tools_enabled)
+                if suggested and suggested in engines_to_try:
+                    engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
+                cached_id = session_engine_cache.get(session_id)
+                if cached_id:
+                    cached = next((e for e in ENGINES if e["id"] == cached_id), None)
+                    if cached and cached in engines_to_try:
+                        engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
+
+            last_error = ""
+            response_text = ""
+            tool_calls_made = []
+            engine_used = "none"
+
+            for engine in engines_to_try:
+                if tools_enabled and not engine.get("supports_tools", False):
+                    continue
+                try:
+                    t0 = time.time()
+                    engine_used = engine["id"]
+                    await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
+                    bus.broadcast({
+                        "type": "engine_call",
+                        "engine_id": engine["id"],
+                        "agent_id": agent_id,
+                        "status": "started",
+                        "ts": datetime.now().isoformat(),
+                    })
+                    bus.broadcast({
+                        "type": "agent_thinking",
+                        "agent_id": agent_id,
+                        "status": "started",
+                        "thought": f"⏳ {agent_id}: επεξεργάζεται μέσω {engine['id']}...",
+                        "ts": datetime.now().isoformat(),
+                    })
+
+                    tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
+
+                    init_resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=False)
+                    init_data = init_resp.json()
+                    init_choice = init_data["choices"][0]
+                    init_msg = init_choice["message"]
+                    init_content = init_msg.get("content", "")
+
+                    tool_calls = init_msg.get("tool_calls")
+                    if not tool_calls:
+                        from tools import parse_xml_tool_calls
+                        xml_tools, cleaned = parse_xml_tool_calls(init_content)
+                        if xml_tools:
+                            tool_calls = xml_tools
+                            init_content = cleaned
+
+                    if tool_calls:
+                        ctx.add_message("assistant", init_content, tool_calls=tool_calls)
+                        await ws_send({"type": "tool_calls", "tool_calls": tool_calls})
+
+                        total_tools = len(tool_calls)
+                        for ti, tc in enumerate(tool_calls):
+                            func_name = tc.get("function", {}).get("name", "")
+                            func_args = json.loads(tc.get("function", {}).get("arguments", "{}")) if tc.get("function", {}).get("arguments") else {}
+                            tc_id = tc.get("id", "")
+                            await ws_send({"type": "tool_start", "name": func_name, "args": func_args})
+                            bus.broadcast({
+                                "type": "task_progress",
+                                "agent_id": agent_id,
+                                "status": "running",
+                                "progress": min(int((ti + 1) / total_tools * 95), 95),
+                                "message": f"🔧 {func_name} ({ti+1}/{total_tools})",
+                                "ts": datetime.now().isoformat(),
+                            })
+                            bus.broadcast({
+                                "type": "agent_thinking",
+                                "agent_id": agent_id,
+                                "status": "thinking",
+                                "thought": f"💭 {agent_id}: εκτελεί {func_name} ({ti+1}/{total_tools})",
+                                "ts": datetime.now().isoformat(),
+                            })
+                            result = await asyncio.to_thread(execute_tool, func_name, func_args, ctx.agent_id)
+                            await ws_send({"type": "tool_result", "name": func_name, "result": result[:500]})
+                            ctx.add_message("tool", result, tool_call_id=tc_id)
+                            tool_calls_made.append({"name": func_name, "result": result[:200]})
+
+                        bus.broadcast({
+                            "type": "agent_thinking",
+                            "agent_id": agent_id,
+                            "status": "synthesizing",
+                            "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα...",
+                            "ts": datetime.now().isoformat(),
+                        })
+
+                        t2 = time.time()
+                        syn_type = "reasoning" if agent_id == "ceo" else task_type
+                        syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024, task_type=syn_type)
+                        full_content = ""
+                        for line in syn_resp.iter_lines():
+                            if not line: continue
+                            if line.startswith(b"data: "):
+                                cs = line[6:].decode()
+                                if cs == "[DONE]": break
+                                try:
+                                    chunk = json.loads(cs)
+                                    d = chunk.get("choices", [{}])[0].get("delta", {})
+                                    if d.get("content"):
+                                        full_content += d["content"]
+                                        await ws_send({"type": "delta", "content": d["content"]})
+                                except: continue
+                        record_engine_perf(engine["id"], time.time() - t2, True)
+                        response_text = full_content
+                        ctx.add_message("assistant", full_content)
+                    else:
+                        await ws_send({"type": "delta", "content": init_content, "ts": datetime.now().isoformat()})
+                        ctx.add_message("assistant", init_content)
+                        response_text = init_content
+
+                    if needs_summary(ctx.messages):
+                        try:
+                            await summarize_conversation(call_engine, engine, trim_messages(ctx.messages), ctx.agent_id)
+                        except:
+                            pass
+                    bus.status(agent_id, False, "has_response")
+                    bus.broadcast({
+                        "type": "agent_thinking",
+                        "agent_id": agent_id,
+                        "status": "complete",
+                        "thought": f"✅ {agent_id} ολοκλήρωσε την απάντηση",
+                        "ts": datetime.now().isoformat(),
+                    })
+                    if tool_calls_made:
+                        bus.broadcast({
+                            "type": "task_progress",
+                            "agent_id": agent_id,
+                            "status": "complete",
+                            "progress": 100,
+                            "message": f"✅ {agent_id} completed",
+                            "ts": datetime.now().isoformat(),
+                        })
+                    bus.broadcast({
+                        "type": "agent_chat",
+                        "agent_id": agent_id,
+                        "session_id": session_id.split(":", 1)[-1] if ":" in session_id else session_id,
+                        "exchange": [
+                            {"role": "user", "content": data.get("message", ""), "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
+                            {"role": "assistant", "content": (response_text or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
+                        ]
+                    })
+                    session_engine_cache[session_id] = engine_used
+                    await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})
+                    try:
+                        from performance import log_performance
+                        perf_duration = time.time() - ws_start_time
+                        log_performance(agent_id, data.get("message",""), perf_duration, engine_used, True, tool_calls=len(tool_calls_made))
+                    except: pass
+                    break
+
+                except Exception as e:
+                    last_error = f"[{engine['id']}] {e}"
+                    record_engine_perf(engine["id"], 0, False)
+                    error_lower = str(e).lower()
+                    if "rate limit" in error_lower or "too large" in error_lower:
+                        mark_engine(engine["id"], "rate_limited", 300)
+                    elif "quota" in error_lower or "billing" in error_lower:
+                        mark_engine(engine["id"], "quota_exhausted", 7200)
+                    elif "timeout" in error_lower or "connection" in error_lower:
+                        mark_engine(engine["id"], "timeout", 120)
+                    continue
+            else:
+                bus.status(agent_id, False, "failure")
+                bus.broadcast({
+                    "type": "agent_thinking",
+                    "agent_id": agent_id,
+                    "status": "error",
+                    "thought": f"❌ {agent_id} απέτυχε: {last_error[:100]}",
+                    "ts": datetime.now().isoformat(),
+                })
+                await ws_send({"type": "error", "message": f"Σφάλμα σε όλα τα engines: {last_error}"})
 
     except WebSocketDisconnect:
         pass
@@ -1203,12 +1293,24 @@ async def websocket_chat(ws: WebSocket):
             pass
     finally:
         active_connections.discard(ws)
+        try: ka_task.cancel()
+        except: pass
         print(f"WS client disconnected: {client_id}")
 
 @app.websocket("/ws/collab")
 async def websocket_collab(ws: WebSocket):
     await ws.accept()
     bus.connections.add(ws)
+
+    async def _keepalive():
+        try:
+            while True:
+                await asyncio.sleep(25)
+                await ws.send_json({"type": "ka"})
+        except:
+            pass
+    ka_task = asyncio.create_task(_keepalive())
+
     print("Collab WS connected")
     try:
         while True:
@@ -1220,6 +1322,8 @@ async def websocket_collab(ws: WebSocket):
         pass
     finally:
         bus.connections.discard(ws)
+        try: ka_task.cancel()
+        except: pass
         print("Collab WS disconnected")
 
 # Serve built frontend for remote access via ngrok
