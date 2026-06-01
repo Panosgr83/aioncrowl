@@ -504,6 +504,21 @@ TOOL_DEFINITIONS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_telegram",
+            "description": "Στέλνει μήνυμα ή αρχείο στο Telegram. Χρήσιμο για αποστολή reports, ειδοποιήσεων, ή αρχείων (docx, pdf, txt). Απαιτεί TELEGRAM_BOT_TOKEN και TELEGRAM_CHAT_ID στο .env.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Το μήνυμα προς αποστολή (HTML supported)"},
+                    "file_path": {"type": "string", "description": "Προαιρετικό path σε αρχείο (π.χ. report.docx)"}
+                },
+                "required": ["message"]
+            }
+        }
+    },
 ]
 
 def resolve_path(path, agent_id=None):
@@ -1362,6 +1377,28 @@ def _execute_tool_impl(name, args, agent_id="agent"):
             link = f"/api/files/download?path={AION_DIR}/aionclaw/uploads/{agent_id}/{fname}"
             bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": fname})
             return f"✅ PowerPoint αρχείο: {fname} ({fsize:,} bytes)\n📎 Σύνδεσμος: {link}"
+        elif name == "send_telegram":
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+            if not token or not chat_id:
+                return "❌ Το Telegram δεν έχει ρυθμιστεί. Ορίσε TELEGRAM_BOT_TOKEN και TELEGRAM_CHAT_ID στο .env"
+            msg = args.get("message", "")
+            file_path = args.get("file_path", "")
+            if file_path and os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    resp = requests.post(
+                        f"https://api.telegram.org/bot{token}/sendDocument",
+                        data={"chat_id": chat_id},
+                        files={"document": f}
+                    )
+            else:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+                )
+            if resp.ok:
+                return f"✅ Μήνυμα στάλθηκε στο Telegram"
+            return f"❌ Σφάλμα Telegram: {resp.status_code} - {resp.text[:200]}"
         return f"Unknown tool: {name}"
     except subprocess.TimeoutExpired as e:
         raise e

@@ -2,8 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import SettingsPanel from './components/SettingsPanel'
 import FileBrowser from './components/FileBrowser'
 import LeadsPanel from './components/LeadsPanel'
-
-const API = 'http://127.0.0.1:9790'
+import ChatInput from './components/ChatInput'
+import AgentPlanModal from './components/AgentPlanModal'
+import API from './config'
 
 function renderMd(text) {
   if (!text) return ''
@@ -33,7 +34,7 @@ function fmtTime(ts) {
 const CATEGORIES = {
   'Core': ['ceo', 'pm'],
   'Tech': ['dev', 'analytics', 'security'],
-  'Business': ['sales', 'leadfinder', 'offers', 'finance'],
+  'Business': ['sales', 'leadfinder', 'offers', 'finance', 'reporter'],
   'Marketing': ['marketing', 'seo', 'content', 'imggen'],
   'Support': ['support', 'memory', 'docsagent', 'consultant'],
 }
@@ -79,7 +80,6 @@ function App() {
   const [agents, setAgents] = useState([])
   const [activeAgent, setActiveAgent] = useState('ceo')
   const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
   const [infoInput, setInfoInput] = useState('')
   const [showInfoInput, setShowInfoInput] = useState(false)
   const [engines, setEngines] = useState([])
@@ -104,7 +104,7 @@ function App() {
   const [currentTool, setCurrentTool] = useState(null)
   const [showActivity, setShowActivity] = useState(false)
   const [activityLog, setActivityLog] = useState([])
-  const [showCollab, setShowCollab] = useState(true)
+  const [showCollab, setShowCollab] = useState(false)
   const [thinkingEvents, setThinkingEvents] = useState([])
   const [compactView, setCompactView] = useState(false)
   const [showKnowledge, setShowKnowledge] = useState(false)
@@ -118,6 +118,8 @@ function App() {
   const [schedTask, setSchedTask] = useState('')
   const [schedInterval, setSchedInterval] = useState(60)
   const [copiedIndex, setCopiedIndex] = useState(null)
+  const [pendingPlanText, setPendingPlanText] = useState(null)
+  const [directMode, setDirectMode] = useState(false)
 
   const [collapsedCategories, setCollapsedCategories] = useState({})
   const [expandedTools, setExpandedTools] = useState({})
@@ -142,8 +144,10 @@ function App() {
   const autoModeRef = useRef(false)
   const autoTimerRef = useRef(null)
   const autoPromptRef = useRef('')
+  const [persistentMode, setPersistentMode] = useState(false)
+  const persistentModeRef = useRef(false)
+  const persistentPromptRef = useRef('')
 
-  const fileInputRef = useRef(null)
   const kbFileRef = useRef(null)
   const wsRef = useRef(null)
   const wsCollabRef = useRef(null)
@@ -209,9 +213,77 @@ function App() {
   const recentThinking = useMemo(() => thinkingEvents.slice(-5).reverse(), [thinkingEvents])
   const hasActiveAgents = thinkingEvents.some(e => e.status === 'started' || e.status === 'thinking' || e.status === 'synthesizing')
 
+  const sendMessageFn = useCallback((text, extraAgents) => {
+    if (!text.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return
+    const sid = activeSession?.sessionId||'default'; const aid = activeAgent
+    pendingRef.current = {agentId:aid,sessionId:sid}
+    setMessages(prev => {
+      const updated = [...prev, {role:'user', content:text, _aid:aid, _sid:sid, ts:new Date().toISOString()}]
+      debouncedSave(`${aid}:${sid}`, updated.filter(m => m._aid===aid && m._sid===sid))
+      return updated
+    })
+    setTyping(true); setCurrentEngine(''); setCurrentTool(null)
+    const payload = {session_id:`${aid}:${sid}`,message:text,engine_id:selectedEngine,agent_id:aid,tools_enabled:true}
+    if (extraAgents && extraAgents.length > 0) {
+      payload.selected_agents = extraAgents
+    }
+    wsRef.current.send(JSON.stringify(payload))
+  }, [activeAgent, activeSession, selectedEngine])
+  const sendMessageRef = useRef(sendMessageFn)
+
+  sendMessageRef.current = sendMessageFn
+
+  const handleSendWithPlan = useCallback((text) => {
+    if (!text.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return
+    // Show plan modal only for CEO chat when direct mode is off
+    if (activeAgent === 'ceo' && !directMode) {
+      setPendingPlanText(text)
+    } else {
+      sendMessageFn(text)
+    }
+  }, [activeAgent, directMode, sendMessageFn])
+
+  const handlePlanConfirm = useCallback((agents) => {
+    if (pendingPlanText) {
+      sendMessageFn(pendingPlanText, agents)
+      setPendingPlanText(null)
+    }
+  }, [pendingPlanText, sendMessageFn])
+
+  const handlePlanCancel = useCallback(() => {
+    setPendingPlanText(null)
+  }, [])
+
+  const handleToggleAuto = useCallback((prompt) => {
+    if (!prompt) {
+      setAutoMode(false); autoModeRef.current = false
+      if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null }
+      addToast('⏹ Auto mode stopped', 'info')
+    } else {
+      autoPromptRef.current = prompt
+      setAutoMode(true); autoModeRef.current = true
+      addToast('▶ Auto mode: ' + prompt.slice(0,40), 'success')
+      sendMessageFn(prompt)
+    }
+  }, [sendMessageFn])
+
+  const handlePersistent = useCallback((prompt) => {
+    if (autoMode) {
+      setAutoMode(false); autoModeRef.current = false
+      if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null }
+    }
+    persistentPromptRef.current = prompt
+    setPersistentMode(true); persistentModeRef.current = true
+    sendMessageFn(prompt + ' — Συνέχισε μέχρι να ολοκληρωθεί. Μην σταματάς μέχρι να έχω πλήρες αποτέλεσμα.')
+    addToast('▶ Persistent: ' + prompt.slice(0,30), 'success')
+  }, [sendMessageFn])
+
   const stopGeneration = useCallback(() => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
     setTyping(false); setCurrentEngine(''); setShowInfoInput(false); setInfoInput('')
+    setAutoMode(false); autoModeRef.current = false
+    if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null }
+    setPersistentMode(false); persistentModeRef.current = false
     setTimeout(() => connectWS(), 500)
   }, [])
 
@@ -236,22 +308,6 @@ function App() {
     setTimeout(() => sendMessageRef.current(`continue with additional info: ${it}`), 100)
   }, [infoInput, activeAgent, activeSession])
 
-  const sendMessageFn = useCallback((text) => {
-    if (!text.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return
-    const sid = activeSession?.sessionId||'default'; const aid = activeAgent
-    pendingRef.current = {agentId:aid,sessionId:sid}
-    setMessages(prev => {
-      const updated = [...prev, {role:'user', content:text, _aid:aid, _sid:sid, ts:new Date().toISOString()}]
-      debouncedSave(`${aid}:${sid}`, updated.filter(m => m._aid===aid && m._sid===sid))
-      return updated
-    })
-    setInput(''); setTyping(true); setCurrentEngine(''); setCurrentTool(null)
-    wsRef.current.send(JSON.stringify({session_id:`${aid}:${sid}`,message:text,engine_id:selectedEngine,agent_id:aid,tools_enabled:true}))
-  }, [activeAgent, activeSession, selectedEngine])
-  const sendMessageRef = useRef(sendMessageFn)
-
-  sendMessageRef.current = sendMessageFn
-
   const wsReconnectTimer = useRef(null)
   const wsConnectAttempt = useRef(0)
   const wsTimeoutRef = useRef(null)
@@ -265,7 +321,7 @@ function App() {
       wsRef.current = null
     }
 
-    const wsUrl = (window.location.origin || 'http://127.0.0.1:9790').replace('http', 'ws')
+    const wsUrl = (window.location.origin || 'http://127.0.0.1:9790').replace(/^http/, 'ws')
     const ws = new WebSocket(`${wsUrl}/ws/chat`)
     wsRef.current = ws
     setWsStatus('connecting')
@@ -388,7 +444,24 @@ function App() {
     }
   }, [messages, autoMode, activeAgent, typing, hasActiveAgents])
 
-  // Cleanup auto timer on unmount
+  // Persistent-mode: keeps sending continuation until user stops
+  useEffect(() => {
+    if (!persistentMode) return
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg?.role === 'assistant' && !typing && !hasActiveAgents) {
+      const timer = setTimeout(() => {
+        if (persistentModeRef.current && !typing) {
+          const next = persistentPromptRef.current
+            ? `ΣΥΝΕΧΙΣΕ — συνέχισε την εργασία μέχρι να ολοκληρωθεί πλήρως. ΜΗΝ ΣΤΑΜΑΤΑΣ. Αν χρειάζεσαι βοήθεια από άλλους agents, επικοινώνησε απευθείας. Το τελικό αποτέλεσμα πρέπει να είναι πλήρες και ολοκληρωμένο. Αρχική εντολή: ${persistentPromptRef.current}`
+            : 'ΣΥΝΕΧΙΣΕ — συνέχισε την εργασία μέχρι να ολοκληρωθεί πλήρως. ΜΗΝ ΣΤΑΜΑΤΑΣ.'
+          sendMessageRef.current(next)
+        }
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [messages, persistentMode, typing, hasActiveAgents])
+
+  // Cleanup timers on unmount
   useEffect(() => { return () => { if (autoTimerRef.current) clearTimeout(autoTimerRef.current) } }, [])
 
   // Toast helper
@@ -435,7 +508,7 @@ function App() {
   useEffect(() => {
     let closed = false
     function connectCollab() {
-      const wsUrl2 = (window.location.origin || 'http://127.0.0.1:9790').replace('http', 'ws')
+      const wsUrl2 = (window.location.origin || 'http://127.0.0.1:9790').replace(/^http/, 'ws')
       const ws = new WebSocket(`${wsUrl2}/ws/collab`)
       wsCollabRef.current = ws
       ws.onmessage = (e) => {
@@ -490,6 +563,10 @@ function App() {
                 ts: data.ts || new Date().toISOString(),
                 agent_id: data.agent_id
               }].slice(-100))
+              // Toast popup when any agent responds
+              if (data.agent_id !== activeAgentRef.current) {
+                addToast(`💬 ${agent?.icon||'🤖'} ${agent?.name||data.agent_id}: ${(lastExchange?.content||'').slice(0,60)}`, 'info')
+              }
             }
             if ((data.agent_id === activeAgentRef.current || activeAgentRef.current === 'ceo') && data.exchange) {
               setMessages(prev => {
@@ -538,7 +615,6 @@ function App() {
 
   useEffect(() => { if(chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight }, [displayMessages, showInfoInput, thinkingEvents])
 
-  const handleKeyDown = (e) => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessageFn(input)} }
   const handleInfoKeyDown = (e) => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitInfo()} }
 
   const switchToSession = useCallback(async (agentId, sessionId) => {
@@ -672,29 +748,41 @@ img{max-width:100%;height:auto}`
     URL.revokeObjectURL(a.href)
   }, [displayMessages, currentAgent])
 
-  const copyMessage = useCallback(async (msg, idx) => {
+  const copyMessage = useCallback((msg, idx) => {
     const isHtml = msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
     const plain = isHtml ? msg.content.replace(/<[^>]*>/g,'') : msg.content
     const fullHtml = isHtml
       ? toWordHtml(msg.content, true)
       : toWordHtml(`<p>${msg.content.replace(/\n/g,'<br>')}</p>`, true)
     try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/html': new Blob([fullHtml], {type:'text/html'}),
-          'text/plain': new Blob([plain], {type:'text/plain'})
-        })
-      ])
-    } catch {
-      await navigator.clipboard.writeText(plain)
+      const ta = document.createElement('textarea')
+      ta.value = plain
+      ta.style.position = 'fixed'; ta.style.left = '-9999px'
+      document.body.appendChild(ta); ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    } catch (_) {
+      try { navigator.clipboard.writeText(plain) } catch (_) {}
     }
     setCopiedIndex(idx)
     setTimeout(() => setCopiedIndex(null), 1500)
   }, [toWordHtml])
 
+  const saveOneWord = useCallback((msg, idx) => {
+    const agent = currentAgent?.name||'Agent'
+    const isHtml = msg.role==='assistant' && /<\/?[a-zA-Z][^>]*>/.test(msg.content)
+    const body = isHtml ? msg.content : `<p>${msg.content.replace(/\n/g,'<br>')}</p>`
+    const doc = toWordHtml(body, true)
+    const blob = new Blob([doc], {type:'application/msword'})
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    const date = new Date().toISOString().slice(0,19).replace(/[T:]/g,'_')
+    a.download = `${agent}_${date}.doc`; a.click()
+    URL.revokeObjectURL(a.href)
+  }, [currentAgent, toWordHtml])
+
   const knowledgePanel = showKnowledge ? (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setShowKnowledge(false)}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+      <div className="modal-content bg-gray-900 border border-gray-700 rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900">
           <span className="text-xs font-medium text-amber-400">🧠 Knowledge Base</span>
           <button onClick={()=>setShowKnowledge(false)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
@@ -871,7 +959,9 @@ img{max-width:100%;height:auto}`
   return (
     <div className="h-screen flex flex-col bg-app-base text-text-primary font-sans overflow-hidden">
       {/* TOP BAR */}
-      <div className="flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
+      <div className="top-bar flex items-center gap-1 px-4 py-1.5 bg-app-surface border-b border-app-elevated shrink-0 overflow-x-auto z-10">
+        <button onClick={()=>setShowAgentSidebar(prev => !prev)}
+          className="hamburger-btn hidden text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800 shrink-0">☰</button>
         <span className="text-accent font-bold text-sm mr-2 shrink-0">AIONCLAW</span>
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${healthOk && connected ? 'bg-success animate-pulse' : 'bg-red-500'}`} title={healthOk ? 'backend online' : 'backend offline'} />
         <span className="text-[10px] text-gray-500 shrink-0 font-mono">{allEngines.length} engines</span>
@@ -897,13 +987,13 @@ img{max-width:100%;height:auto}`
           <button onClick={()=>setSidebarPanel('settings')} className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800">⚙ Settings</button>
           <button onClick={async()=>{try{const r=await fetch(`${API}/api/knowledge/stats?project=${currentProject}`);setKbStats(await r.json());setKbTab('browse');setShowKnowledge(true)}catch(_){}}}
             className="text-[10px] px-2 py-1 rounded text-gray-500 hover:text-amber-300 hover:bg-gray-800">🧠 KB</button>
-          <button onClick={()=>{fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d=>d.stats&&setAgentPerf(d.stats)).catch(()=>{});fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d=>d.entries&&setCommEvents(d.entries)).catch(()=>{});setShowConsole(true)}}
+          <button onClick={()=>{setShowCollab(true);fetch(`${API}/api/agent-perf`).then(r=>r.json()).then(d=>d.stats&&setAgentPerf(d.stats)).catch(()=>{});fetch(`${API}/api/comm-log`).then(r=>r.json()).then(d=>d.entries&&setCommEvents(d.entries)).catch(()=>{});setShowConsole(true)}}
             className={`text-[10px] px-2 py-1 rounded transition-colors ${hasActiveAgents ? 'console-btn-live text-yellow-300 bg-yellow-500/10' : 'text-emerald-400 hover:text-emerald-300 hover:bg-gray-800'}`}>🎮 Console</button>
         </div>
       </div>
 
       {/* ENGINE STATUS STRIP */}
-      <div className="flex items-center gap-1.5 px-4 py-1 bg-app-elevated/60 border-b border-app-elevated shrink-0 overflow-x-auto min-h-[28px]">
+      <div className="engine-strip flex items-center gap-1.5 px-4 py-1 bg-app-elevated/60 border-b border-app-elevated shrink-0 overflow-x-auto min-h-[28px]">
         {allEngines.map(e => {
           const status = e.status || 'unknown'
           const statusColor = status === 'active' ? 'bg-success' : status === 'degraded' ? 'bg-warning' : status === 'rate_limited' ? 'bg-info' : status === 'quota_exhausted' || status === 'needs_key' ? 'bg-error' : status === 'timeout' ? 'bg-warning' : 'bg-text-dim'
@@ -920,7 +1010,7 @@ img{max-width:100%;height:auto}`
 
       <div className="flex flex-1 min-h-0">
         {/* LEFT SIDEBAR */}
-        <div className="w-56 bg-app-surface border-r border-app-elevated flex flex-col shrink-0">
+        <div className="sidebar-left w-56 bg-app-surface border-r border-app-elevated flex flex-col shrink-0">
           <div className="flex items-center justify-between px-4 py-3 border-b border-app-elevated">
             <h1 className="text-sm font-bold text-accent">AIONCLAW</h1>
           </div>
@@ -1044,7 +1134,7 @@ img{max-width:100%;height:auto}`
         {/* CHAT AREA */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Chat header */}
-          <div className="flex items-center gap-3 px-6 py-2 border-b border-app-elevated bg-app-surface/50 text-xs shrink-0">
+          <div className="chat-header flex items-center gap-3 px-6 py-2 border-b border-app-elevated bg-app-surface/50 text-xs shrink-0">
             <span className="text-lg">{currentAgent?.icon}</span>
             <div>
               <span className="text-accent font-medium">{currentAgent?.name}</span>
@@ -1056,7 +1146,7 @@ img{max-width:100%;height:auto}`
               {typing&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"/>Generating...</span>}
               {loadingHistory&&<span className="text-gray-500">Loading...</span>}
             </div>
-            <div className="ml-auto flex items-center gap-1">
+            <div className="header-actions ml-auto flex items-center gap-1">
               {displayMessages.length>0&&(
                 <>
                   <button onClick={exportWord} className="text-gray-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-gray-800 text-[10px] flex items-center gap-1" title="Export to Word">📄 Word</button>
@@ -1070,7 +1160,7 @@ img{max-width:100%;height:auto}`
             </div>
           </div>
 
-          <div ref={chatRef} className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div ref={chatRef} className="chat-msgs flex-1 overflow-y-auto p-6 space-y-4">
             {displayMessages.length===0&&!loadingHistory&&(
               <div className="h-full flex items-center justify-center text-gray-600">
                 <div className="text-center space-y-2">
@@ -1155,6 +1245,9 @@ img{max-width:100%;height:auto}`
                       <button onClick={()=>copyMessage(msg, i)} className="msg-action-btn" title="Copy">
                         {copiedIndex===i?'✓':'📋'}
                       </button>
+                      <button onClick={()=>saveOneWord(msg, i)} className="msg-action-btn" title="Save as Word">
+                        📄
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1189,35 +1282,65 @@ img{max-width:100%;height:auto}`
               </div>
             )}
 
-            {taskProgress && taskProgress.status !== 'complete' && (
+            {(typing || taskProgress) && (
               <div className="flex justify-start">
-                <div className="w-full max-w-md bg-app-surface/60 rounded-xl p-3 border border-accent/30">
-                  <div className="flex items-center gap-2 text-xs text-text-secondary mb-1.5">
-                    <span className="text-sm">{agents.find(a=>a.id===taskProgress.agent_id)?.icon||'🤖'}</span>
-                    <span>{taskProgress.message}</span>
-                    <span className="ml-auto text-accent">{taskProgress.progress}%</span>
-                  </div>
-                  <div className="h-1.5 bg-app-elevated rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-accent to-accent-dim rounded-full transition-all duration-500"
-                      style={{width:`${taskProgress.progress}%`}} />
-                  </div>
-                  {taskProgress.remaining_seconds > 0 && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <div className="flex-1 h-0.5 bg-app-elevated rounded-full overflow-hidden">
-                        <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,taskProgress.progress)}%`}}/>
-                      </div>
-                      <span className="text-[10px] text-accent/80 shrink-0">~{taskProgress.remaining_seconds}s</span>
+                <div className="w-full max-w-xl bg-app-surface/60 rounded-xl p-3 border border-accent/20">
+                  {/* Live agent action log */}
+                  {liveEvents.length > 0 && typing && (
+                    <div className="mb-2 space-y-0.5 max-h-24 overflow-y-auto text-[10px] font-mono leading-tight">
+                      {liveEvents.slice(-8).map((ev, ei) => (
+                        <div key={ei} className={`flex items-center gap-1 ${
+                          ev._liveType === 'engine_call' ? 'text-accent/70' :
+                          ev._liveType === 'tool_exec' ? 'text-amber-400/70' :
+                          ev._liveType === 'complete' ? 'text-green-400/70' :
+                          ev._liveType === 'error' ? 'text-red-400/70' :
+                          ev._liveType === 'comm' ? 'text-purple-400/70' :
+                          ev._liveType === 'progress' ? 'text-text-dim/80' :
+                          ev._liveType === 'thinking' ? 'text-accent/60' : 'text-text-dim/60'
+                        }`}>
+                          <span className="text-[8px] text-text-dim/40 w-10 shrink-0">
+                            {(ev.ts||'').slice(11,19)||(ev._ts?new Date(ev._ts).toLocaleTimeString():'')}
+                          </span>
+                          {ev._liveType === 'engine_call' && <span>⚡</span>}
+                          {ev._liveType === 'tool_exec' && <span>🔧</span>}
+                          {ev._liveType === 'complete' && <span>✅</span>}
+                          {ev._liveType === 'error' && <span>❌</span>}
+                          {ev._liveType === 'comm' && <span>💬</span>}
+                          {ev._liveType === 'progress' && <span>📊</span>}
+                          {ev._liveType === 'thinking' && <span>⏳</span>}
+                          <span className="truncate">{ev.content||'...'}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
-                </div>
-              </div>
-            )}
-
-            {taskProgress && taskProgress.status === 'complete' && taskProgress.duration_s && (
-              <div className="flex justify-start">
-                <div className="bg-app-surface rounded-xl px-3 py-2 border border-success/30 text-xs text-text-secondary flex items-center gap-2">
-                  <span>✅ {agents.find(a=>a.id===taskProgress.agent_id)?.icon} {taskProgress.agent_id}</span>
-                  <span className="text-success">{taskProgress.duration_s}s</span>
+                  {/* Progress bar */}
+                  {taskProgress && taskProgress.status !== 'complete' && (
+                    <>
+                      <div className="flex items-center gap-2 text-xs text-text-secondary mb-1.5">
+                        <span className="text-sm">{agents.find(a=>a.id===taskProgress.agent_id)?.icon||'🤖'}</span>
+                        <span className="truncate">{taskProgress.message||'Processing...'}</span>
+                        <span className="ml-auto text-accent font-mono">{taskProgress.progress||0}%</span>
+                      </div>
+                      <div className="h-2 bg-app-elevated rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-accent to-accent-dim rounded-full transition-all duration-500"
+                          style={{width:`${taskProgress.progress||0}%`}} />
+                      </div>
+                      {taskProgress.remaining_seconds > 0 && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="flex-1 h-0.5 bg-app-elevated rounded-full overflow-hidden">
+                            <div className="h-full bg-accent rounded-full animate-pulse" style={{width:`${Math.min(100,taskProgress.progress||0)}%`}}/>
+                          </div>
+                          <span className="text-[10px] text-accent/80 shrink-0 font-mono">~{taskProgress.remaining_seconds}s</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {taskProgress && taskProgress.status === 'complete' && taskProgress.duration_s && (
+                    <div className="flex items-center gap-2 text-xs text-text-secondary">
+                      <span>✅ {agents.find(a=>a.id===taskProgress.agent_id)?.icon} {taskProgress.agent_id}</span>
+                      <span className="text-success font-mono">{taskProgress.duration_s}s</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1225,58 +1348,25 @@ img{max-width:100%;height:auto}`
 
 
 
-          <div className="border-t border-app-elevated/60 px-4 py-3 bg-app-surface/30">
-            <div className="flex gap-2 max-w-4xl mx-auto items-end">
-              <div className="flex-1 flex gap-2 items-end bg-app-elevated/80 border border-app-elevated rounded-2xl px-4 py-2 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px_var(--accent-glow)] transition-all">
-                <textarea value={input} onChange={e=>{setInput(e.target.value);e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,200)+'px'}}
-                  onKeyDown={handleKeyDown}
-                  placeholder={connected?`Μήνυμα στον ${currentAgent?.name}...`:'Connecting...'}
-                  disabled={!connected}
-                  rows={1}
-                  className="flex-1 resize-none bg-transparent text-sm text-text-primary placeholder-text-dim/50 focus:outline-none disabled:opacity-40 leading-relaxed max-h-[200px]"
-                  style={{minHeight:'24px'}}
-                />
-                <button onClick={() => fileInputRef.current?.click()}
-                  className="text-text-dim/60 hover:text-accent transition-colors text-sm shrink-0" title="Upload file">📎</button>
-                <input ref={fileInputRef} type="file" className="hidden" onChange={async (e) => {
-                  const file = e.target.files?.[0]; if (!file) return
-                  const form = new FormData(); form.append('file', file)
-                  try {
-                    const r = await fetch(`${API}/api/agents/${activeAgent}/upload`, {method:'POST', body:form})
-                    if (r.ok) {
-                      const d = await r.json()
-                      setMessages(prev => [...prev, {role:'system', content:`📎 Ανέβηκε το αρχείο: ${d.filename}`, _aid:activeAgent, _sid:activeSession?.sessionId||'default', _sysType:'info'}])
-                      const r2 = await fetch(`${API}/api/agents/${activeAgent}/files`)
-                      const d2 = await r2.json()
-                      setAgentFiles(prev => ({...prev, [activeAgent]: d2.files||[]}))
-                    }
-                  } catch(_) {}
-                  e.target.value = ''
-                }} />
-              </div>
-              {typing && (
-                <button onClick={stopGeneration} className="bg-error/10 hover:bg-error/20 text-error rounded-full px-4 py-2 font-medium transition-all flex items-center gap-1.5 text-sm border border-error/20 shrink-0"><span>■</span></button>
-              )}
-              <button onClick={() => {
-                if (autoMode) {
-                  setAutoMode(false); autoModeRef.current = false
-                  if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null }
-                  addToast('⏹ Auto mode stopped', 'info')
-                } else {
-                  const prompt = input.trim() || 'συνέχισε'
-                  autoPromptRef.current = prompt
-                  setAutoMode(true); autoModeRef.current = true
-                  addToast('▶ Auto mode: ' + prompt.slice(0,40), 'success')
-                  sendMessageFn(prompt)
-                }
+          <div className="input-bar border-t border-app-elevated/60 px-4 py-3 bg-app-surface/30">
+            <ChatInput
+              onSend={handleSendWithPlan}
+              connected={connected}
+              typing={typing}
+              onStop={stopGeneration}
+              autoMode={autoMode}
+              onToggleAuto={handleToggleAuto}
+              onPersistent={handlePersistent}
+              persistentMode={persistentMode}
+              activeAgent={activeAgent}
+              activeSession={activeSession}
+              directMode={directMode}
+              onToggleDirect={() => setDirectMode(prev => !prev)}
+              onFileUploaded={(filename) => {
+                setMessages(prev => [...prev, {role:'system', content:`📎 Ανέβηκε το αρχείο: ${filename}`, _aid:activeAgent, _sid:activeSession?.sessionId||'default', _sysType:'info'}])
+                fetch(`${API}/api/agents/${activeAgent}/files`).then(r=>r.json()).then(d=>setAgentFiles(prev=>({...prev,[activeAgent]:d.files||[]}))).catch(()=>{})
               }}
-                className={`text-[10px] px-2.5 py-2 rounded-full font-bold transition-all shrink-0 ${autoMode ? 'bg-green-500/20 text-green-400 border border-green-500/40 animate-pulse' : 'bg-app-elevated text-gray-400 hover:text-gray-300 border border-app-elevated'}`}
-                title={autoMode ? 'Stop auto mode' : 'Αυτόνομη συνέχεια: ο agent συνεχίζει μέχρι να ολοκληρωθεί'}>
-                {autoMode ? '■' : '♾️'}
-              </button>
-              <button onClick={()=>sendMessageFn(input)} disabled={!connected||!input.trim()}
-                className="bg-accent hover:bg-accent-dim disabled:bg-app-elevated text-white rounded-full px-5 py-2.5 font-medium transition-all disabled:text-text-dim shrink-0 text-sm">Send →</button>
-            </div>
+            />
           </div>
         </div>
 
@@ -1284,7 +1374,7 @@ img{max-width:100%;height:auto}`
         {showCollab && (
           <>
             <div className="fixed inset-0 z-40" onClick={()=>setShowCollab(false)} />
-            <div className="fixed right-0 top-0 bottom-0 w-80 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
+            <div className="drawer-panel fixed right-0 top-0 bottom-0 w-80 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
               <div className="px-4 py-3 border-b border-app-elevated flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="text-text-secondary uppercase font-medium tracking-wider text-[10px]">Context</span>
@@ -1435,9 +1525,9 @@ img{max-width:100%;height:auto}`
         )}
       </div>
       {/* BOTTOM BACKEND LOG CONSOLE */}
-      <div className="bg-app-surface border-t border-app-elevated shrink-0 overflow-hidden" onClick={()=>{setShowConsole(true)}}>
+      <div className="bottom-bar bg-app-surface border-t border-app-elevated shrink-0 overflow-hidden" onClick={()=>{setShowCollab(true);setShowConsole(true)}}>
         {/* Status row */}
-        <div className="flex items-center gap-2 px-3 py-1 text-[10px] overflow-x-auto border-b border-app-elevated/40">
+        <div className="bottom-status flex items-center gap-2 px-3 py-1 text-[10px] overflow-x-auto border-b border-app-elevated/40">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${healthOk && connected?'bg-success':'bg-error'}`} title={healthOk?'backend online':'offline'} />
           <span className="text-gray-600 shrink-0">{wsStatus}</span>
           <span className="text-gray-700 shrink-0">·</span>
@@ -1471,7 +1561,7 @@ img{max-width:100%;height:auto}`
           </div>
         </div>
         {/* Live backend log feed */}
-        <div className="h-20 overflow-y-auto px-3 py-1 space-y-0.5 font-mono text-[9px]">
+        <div className="bottom-feed h-20 overflow-y-auto px-3 py-1 space-y-0.5 font-mono text-[9px]">
           {liveEvents.length === 0 ? (
             <div className="text-gray-700 italic py-2">Waiting for backend activity...</div>
           ) : (
@@ -1513,7 +1603,7 @@ img{max-width:100%;height:auto}`
       {showAgentSidebar && (
         <>
           <div className="fixed inset-0 z-40" onClick={()=>setShowAgentSidebar(false)} />
-          <div className="fixed right-0 top-0 bottom-0 w-72 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
+          <div className="live-sidebar fixed right-0 top-0 bottom-0 w-72 bg-app-surface/95 backdrop-blur-sm border-l border-app-elevated flex flex-col z-50 shadow-2xl shadow-black/50 animate-fade-in">
             <div className="px-3 py-2.5 border-b border-app-elevated flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <span className="text-text-secondary uppercase font-medium tracking-wider text-[10px]">Live Agents</span>
@@ -1615,7 +1705,7 @@ img{max-width:100%;height:auto}`
         const perf = agentPerf[a.id]
         return (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={()=>setSelectedAgentDetail(null)}>
-            <div className="bg-gray-900 border border-gray-700 rounded-xl w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+            <div className="modal-content bg-gray-900 border border-gray-700 rounded-xl w-[500px] max-w-[90vw] max-h-[80vh] flex flex-col" onClick={e=>e.stopPropagation()}>
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="text-xl">{a.icon}</span>
@@ -1716,7 +1806,7 @@ img{max-width:100%;height:auto}`
       {/* AGENT CONSOLE */}
       {showConsole && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={()=>setShowConsole(false)}>
-          <div className="bg-gray-900 border border-gray-700 rounded-xl w-[700px] max-w-[95vw] max-h-[85vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+          <div className="modal-content bg-gray-900 border border-gray-700 rounded-xl w-[700px] max-w-[95vw] max-h-[85vh] flex flex-col" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
               <div className="flex gap-4">
                 <button onClick={()=>setConsoleTab('activity')}
@@ -1867,6 +1957,10 @@ img{max-width:100%;height:auto}`
             )}
           </div>
         </div>
+      )}
+
+      {pendingPlanText && (
+        <AgentPlanModal text={pendingPlanText} onConfirm={handlePlanConfirm} onCancel={handlePlanCancel} />
       )}
     </div>
   )

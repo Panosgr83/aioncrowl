@@ -15,7 +15,7 @@ from tools import TOOL_DEFINITIONS, get_tool_definitions_for_agent, execute_tool
 from agents import AGENTS, get_agent, get_agents
 from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
 from collaboration import bus
-from scheduler import start_scheduler, get_jobs, add_job, delete_job, toggle_job, run_job_now
+from scheduler import start_scheduler, get_jobs, add_job, add_cron_job, delete_job, toggle_job, run_job_now
 from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, UPLOADS_DIR as CFG_UPLOADS_DIR, COLLAB_LOG, LEADS_FILE, DOTENV_FILE, PROJECT_FILE as CFG_PROJECT_FILE
 
 MAX_TOOL_ITER = 5
@@ -850,11 +850,25 @@ class SchedulerAdd(BaseModel):
     interval_minutes: int = 60
     project: str = ""
 
+class SchedulerCronAdd(BaseModel):
+    name: str
+    agent_id: str
+    task: str
+    cron: str
+    project: str = ""
+
 @app.post("/api/scheduler/add")
 async def scheduler_add(data: SchedulerAdd):
     from kb import _get_current_project
     project = data.project or _get_current_project()
     job = add_job(data.name, data.agent_id, data.task, data.interval_minutes, project)
+    return {"status": "added", "job": job}
+
+@app.post("/api/scheduler/cron")
+async def scheduler_cron(data: SchedulerCronAdd):
+    from kb import _get_current_project
+    project = data.project or _get_current_project()
+    job = add_cron_job(data.name, data.agent_id, data.task, data.cron, project)
     return {"status": "added", "job": job}
 
 @app.delete("/api/scheduler/{job_id}")

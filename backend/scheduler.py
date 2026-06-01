@@ -2,6 +2,7 @@ import json, os, time
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from config import MEMORY_DIR
 
 JOBS_FILE = str(MEMORY_DIR / "scheduled_jobs.json")
@@ -40,6 +41,31 @@ def add_job(name, agent_id, task, interval_minutes=60, project="default"):
         "agent_id": agent_id,
         "task": str(task)[:1000],
         "interval_minutes": interval_minutes,
+        "cron_expr": "",
+        "trigger_type": "interval",
+        "project": project,
+        "enabled": True,
+        "created": datetime.now().isoformat(),
+        "last_run": None,
+        "run_count": 0,
+    }
+    jobs.append(job)
+    _save_jobs(jobs)
+    _schedule_job(job)
+    return job
+
+def add_cron_job(name, agent_id, task, cron_expr, project="default"):
+    """Add a cron-triggered job (e.g. '0 9 * * 1' for every Monday 9AM)."""
+    jobs = _load_jobs()
+    jid = str(int(datetime.now().timestamp() * 1000))
+    job = {
+        "id": jid,
+        "name": name,
+        "agent_id": agent_id,
+        "task": str(task)[:1000],
+        "interval_minutes": 0,
+        "cron_expr": cron_expr,
+        "trigger_type": "cron",
         "project": project,
         "enabled": True,
         "created": datetime.now().isoformat(),
@@ -105,15 +131,28 @@ def _execute_job(job):
 def _schedule_job(job):
     if not job.get("enabled", True):
         return
-    minutes = max(1, job.get("interval_minutes", 60))
-    _get_scheduler().add_job(
-        func=_execute_job,
-        trigger=IntervalTrigger(minutes=minutes),
-        args=[job],
-        id=job["id"],
-        name=job["name"],
-        replace_existing=True,
-    )
+    sched = _get_scheduler()
+    if job.get("trigger_type") == "cron" and job.get("cron_expr"):
+        parts = job["cron_expr"].strip().split()
+        if len(parts) == 5:
+            sched.add_job(
+                func=_execute_job,
+                trigger=CronTrigger(minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4]),
+                args=[job],
+                id=job["id"],
+                name=job["name"],
+                replace_existing=True,
+            )
+    else:
+        minutes = max(1, job.get("interval_minutes", 60))
+        sched.add_job(
+            func=_execute_job,
+            trigger=IntervalTrigger(minutes=minutes),
+            args=[job],
+            id=job["id"],
+            name=job["name"],
+            replace_existing=True,
+        )
 
 def start_scheduler():
     sched = _get_scheduler()
