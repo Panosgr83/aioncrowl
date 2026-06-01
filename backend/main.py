@@ -37,7 +37,11 @@ async def lifespan(app):
     print(f"Projects: {pdata['projects']}")
     start_scheduler()
     print("Scheduler started")
+    from telegram_bot import start as start_telegram
+    start_telegram()
     yield
+    from telegram_bot import stop as stop_telegram
+    stop_telegram()
     print("AIONCLAW server stopped.")
 
 app = FastAPI(title="AIONCLAW", version="1.0.0", lifespan=lifespan)
