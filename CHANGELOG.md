@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.0.0] — Enterprise-Grade Refactoring Sprint (11.5h)
+
+### Day 1 — Modular Architecture
+- **Split main.py** (1417→65 lines) into 8 router modules under `routers/`
+- **Created `shared.py`** (~400 lines): AgentContext, run_agent, GREEK_LANG, models, helpers, all shared globals
+- **8 routers**: chat, agents, sessions, files, projects, knowledge, scheduler_routes, admin
+- Zero circular imports, 72 routes total
+
+### Day 2 — Summary Injection + File I/O Locking
+- **Context compression**: `_make_summary_block()` condenses old messages into summary when >8
+- **Memory summaries injected** into AgentContext system prompt from `get_summaries()`
+- **Thread-safe file I/O**: `_project_lock`, `_session_file_lock` in shared.py; `_memory_lock` in memory_summary.py
+- Helper functions: `_load_session_file()`, `_save_session_file()`, `_merge_session_messages()`
+
+### Day 3 — Error Normalization + Health Endpoint
+- **Custom exception handler** with Greek error messages:
+  - 429: "Πολλά αιτήματα — παρακαλώ περιμένετε λίγο"
+  - 404: "Δεν βρέθηκε αυτό που ζητάτε."
+  - 500: "Προέκυψε ένα εσωτερικό σφάλμα"
+- **Health endpoint enhanced**: uptime, active_sessions, active_engines, engine list
+
+### Day 4 — Test Suite
+- **45 pytest tests** across 5 files:
+  - `test_engines.py` (8): scoring, filtering, performance recording
+  - `test_agents.py` (11): prompts, routing, delegation validation
+  - `test_tools.py` (12): execution, XML parsing, error handling
+  - `test_api.py` (15): 20 endpoints with TestClient
+  - `test_shared.py` (11): summary injection, file locking, caching
+
+### Day 5 — Rate Limiting
+- **In-memory rate limiter**: 30 requests per 60s per IP
+- Clean 429 JSON response with Greek message
+- Zero external dependencies
+
+### Day 6 — Input Sanitization
+- **30 injection patterns** blocked: prompt injection, DAN, role-switching, system prompt reveal
+- Sanitization at 3 levels: POST `/api/chat`, WebSocket handler, HTTP middleware
+- `detect_injection()` function in shared.py
+
+### Day 7 — Packaging + CLI + Graceful Shutdown
+- **`setup.py`**: entry points, install_requires, extras_require[dev]
+- **`aionctl` CLI**: start, stop, restart, status, logs
+- **Graceful shutdown**: waits for pending engine calls before exit
+- **`requirements.txt`** updated with all dependencies
+
 ## [Unreleased] — Major Upgrade
 
 ### Removed

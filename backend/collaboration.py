@@ -1,9 +1,16 @@
 import json, os, uuid, asyncio, time as time_module
 from datetime import datetime
-from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, COLLAB_LOG
+from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, COLLAB_LOG, PROJECT_FILE
 
 SESSION_DIR = str(SESSIONS_DIR)
 MEMORY_FILE = str(MEMORY_DIR / "memory.json")
+
+def _current_project():
+    try:
+        with open(str(PROJECT_FILE)) as f:
+            return json.load(f).get("current", "default")
+    except:
+        return "default"
 
 class AgentBus:
     def __init__(self):
@@ -77,10 +84,18 @@ class AgentBus:
 
 bus = AgentBus()
 
-def save_to_agent_session(agent_id, session_id, user_msg, assistant_msg):
+def save_to_agent_session(agent_id, session_id, user_msg, assistant_msg, project=None):
     full_key = f"{agent_id}:{session_id}"
     safe = full_key.replace(":", "_").replace("/", "_")
-    pdir = os.path.join(SESSION_DIR, "default")
+    if not project:
+        from config import PROJECT_FILE
+        try:
+            with open(str(PROJECT_FILE)) as pf:
+                pdata = json.load(pf)
+                project = pdata.get("current", "default")
+        except:
+            project = "default"
+    pdir = os.path.join(SESSION_DIR, project)
     fpath = os.path.join(pdir, f"{safe}.json")
     os.makedirs(pdir, exist_ok=True)
     try:
@@ -122,6 +137,11 @@ def run_sub_agent(agent_id, task, context="", engine_override="", format="compac
         "started_at": started_at,
         "ts": datetime.now().isoformat(),
     })
+    try:
+        from telegram_bot import push_event
+        push_event(_current_project(), "started", agent_id, agent['name'])
+    except:
+        pass
 
     if format == "full":
         greek_lang = "ΓΡΑΨΕ ΣΕ ΑΡΙΣΤΑ ΣΥΓΧΡΟΝΑ ΕΛΛΗΝΙΚΑ — φυσικά, καθαρά, με σωστή γραμματική και ορθογραφία."
@@ -228,6 +248,11 @@ TASK:{task} | CONTEXT:{context or '-'} | TOOLS:execute"""
             log_performance(agent_id, task, duration, engine["id"], True, tool_calls=tool_count)
             bus.engine_cache[agent_id] = engine["id"]
             bus.broadcast({"type": "agent_thinking", "agent_id": agent_id, "status": "complete", "thought": f"✅ {agent_icon} {agent['name']} ολοκλήρωσε σε {duration:.1f}s", "estimated_seconds": estimated_seconds, "duration_s": round(duration, 1), "started_at": started_at, "ts": datetime.now().isoformat()})
+            try:
+                from telegram_bot import push_event
+                push_event(_current_project(), "complete", agent_id, agent['name'], duration)
+            except:
+                pass
             return text
 
             # Normal two-call flow for complex agents
@@ -332,6 +357,11 @@ TASK:{task} | CONTEXT:{context or '-'} | TOOLS:execute"""
                 "started_at": started_at,
                 "ts": datetime.now().isoformat(),
             })
+            try:
+                from telegram_bot import push_event
+                push_event(_current_project(), "complete", agent_id, agent['name'], duration)
+            except:
+                pass
 
             return text
         except Exception as e:
@@ -350,4 +380,9 @@ TASK:{task} | CONTEXT:{context or '-'} | TOOLS:execute"""
         "duration_s": round(time_module.time() - start_time, 1),
         "ts": datetime.now().isoformat(),
     })
+    try:
+        from telegram_bot import push_event
+        push_event(_current_project(), "error", agent_id, last_error[:100], round(time_module.time() - start_time, 1))
+    except:
+        pass
     return f"Σφάλμα: {last_error}"

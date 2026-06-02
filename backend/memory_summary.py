@@ -1,10 +1,12 @@
-import json, os, time
+import json, os, time, threading
 from datetime import datetime
 from pathlib import Path
 from kb import _get_current_project
 from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR
 
 SUMMARY_THRESHOLD = 6
+
+_memory_lock = threading.Lock()
 
 def _get_memory_path(project=None, must_exist=True):
     if project:
@@ -22,24 +24,26 @@ def _get_sessions_dir(project=None):
 
 def load_memory(project=None):
     path = _get_memory_path(project)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.exists(path):
-            with open(path) as f:
-                return json.load(f)
-    except:
-        pass
+    with _memory_lock:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f)
+        except:
+            pass
     return {}
 
 def save_memory(data, project=None):
     path = _get_memory_path(project, must_exist=False)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return True
-    except:
-        return False
+    with _memory_lock:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except:
+            return False
 
 def store_fact(key, value, agent_id="ceo", source="user", project=None):
     project = project or _get_current_project()

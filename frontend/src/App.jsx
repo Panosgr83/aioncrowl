@@ -147,6 +147,7 @@ function App() {
   const [persistentMode, setPersistentMode] = useState(false)
   const persistentModeRef = useRef(false)
   const persistentPromptRef = useRef('')
+  const [auto247Mode, setAuto247Mode] = useState(false)
 
   const kbFileRef = useRef(null)
   const wsRef = useRef(null)
@@ -195,12 +196,26 @@ function App() {
       setAgents(d.agents||[])
       if (d.agents?.length) {
         const id = d.agents[0].id
-        setActiveAgent(id)
-        setSessions({[id]:[{id:'default',label:'Chat 1',agentId:id}]})
-        setActiveSession({agentId:id,sessionId:'default'})
-        loadMessages(`${id}:default`).then(msgs => {
-          if (msgs.length) setMessages(msgs.map(m => ({...m, ts: m.ts || new Date().toISOString()})))
+        // Fetch existing session files for this agent (includes Telegram sessions)
+        fetch(`${API}/api/sessions/list/${id}`).then(r=>r.json()).then(sd => {
+          const fileSessions = (sd.sessions||[]).map(s => ({...s, agentId: id}))
+          const allSessions = [{id:'default',label:'Chat 1',agentId:id}, ...fileSessions.filter(s => s.id !== 'default')]
+          setSessions({[id]: allSessions})
+          setActiveSession({agentId:id,sessionId:'default'})
+          loadMessages(`${id}:default`).then(msgs => {
+            if (msgs.length) setMessages(msgs.map(m => ({...m, ts: m.ts || new Date().toISOString()})))
+          })
+        }).catch(() => {
+          setSessions({[id]:[{id:'default',label:'Chat 1',agentId:id}]})
+          setActiveSession({agentId:id,sessionId:'default'})
+          loadMessages(`${id}:default`).then(msgs => {
+            if (msgs.length) setMessages(msgs.map(m => ({...m, ts: m.ts || new Date().toISOString()})))
+          })
         })
+        // Check 24/7 auto mode status
+        fetch(`${API}/api/auto/status`).then(r=>r.json()).then(s => {
+          if (s.active) setAuto247Mode(true)
+        }).catch(()=>{})
       }
     }).catch(()=>{})
   }, [])
@@ -277,6 +292,27 @@ function App() {
     sendMessageFn(prompt + ' — Συνέχισε μέχρι να ολοκληρωθεί. Μην σταματάς μέχρι να έχω πλήρες αποτέλεσμα.')
     addToast('▶ Persistent: ' + prompt.slice(0,30), 'success')
   }, [sendMessageFn])
+
+  const toggleAuto247 = useCallback(async () => {
+    const next = !auto247Mode
+    try {
+      const r = await fetch(`${API}/api/auto/toggle`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active: next, interval: 60})
+      })
+      const d = await r.json()
+      if (d.status === 'started') {
+        setAuto247Mode(true)
+        addToast('♾️ 24/7 Auto mode started', 'success')
+      } else {
+        setAuto247Mode(false)
+        addToast('⏹ 24/7 Auto mode stopped', 'info')
+      }
+    } catch {
+      addToast('❌ Failed to toggle 24/7 mode', 'error')
+    }
+  }, [auto247Mode])
 
   const stopGeneration = useCallback(() => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null }
@@ -550,6 +586,11 @@ function App() {
             if (data.status === 'complete' && data.agent_id !== activeAgentRef.current) {
               const a = agents.find(x => x.id === data.agent_id)
               setMessages(prev => [...prev, {role:'system', content:`✅ ${a?.icon||''} ${a?.name||data.agent_id} ολοκλήρωσε σε ${data.duration_s||'?'}s`, _aid: activeAgentRef.current, _sid: pendingRef.current.sessionId||'default', ts: new Date().toISOString(), _sysType: 'info'}])
+            }
+          } else if (data.type === 'auto_result') {
+            if (data.project === currentProject) {
+              addToast(`🤖 Auto 24/7: ${(data.content||'').slice(0,60)}`, 'success')
+              setCollabEvents(prev => [...prev, {_liveType: 'auto', content: `♾️ ${(data.content||'').slice(0,200)}`, ts: data.ts}].slice(-100))
             }
           } else if (data.type === 'agent_chat') {
             setCollabEvents(prev => [...prev, {...data, _ts: Date.now()}].slice(-100))
@@ -1073,7 +1114,7 @@ img{max-width:100%;height:auto}`
                   return (
                     <button key={s.id} onClick={()=>switchToSession(activeAgent,s.id)}
                       className={`w-full text-left text-[11px] px-3 py-1.5 rounded transition-all flex items-center gap-2 ${isActive ? 'bg-accent/10 text-text-primary border-l-2 border-accent' : 'text-text-secondary hover:bg-app-elevated border-l-2 border-transparent'}`}>
-                      <span className="text-sm shrink-0">💬</span>
+                      <span className="text-sm shrink-0">{s.id.startsWith('telegram_') ? '📱' : '💬'}</span>
                       <div className="flex-1 min-w-0">
                         <div className="truncate">{s.label}</div>
                         {msgCount > 0 && <div className="text-[9px] text-text-dim">{msgCount} msgs</div>}
@@ -1139,12 +1180,18 @@ img{max-width:100%;height:auto}`
             <div>
               <span className="text-accent font-medium">{currentAgent?.name}</span>
               <span className="text-gray-600 ml-2">{agentSessions.find(s=>s.id===activeSession?.sessionId)?.label||'Chat'}</span>
+              {activeSession?.sessionId?.startsWith('telegram_') && <span className="text-[10px] text-text-dim ml-1">📱</span>}
             </div>
             <div className="flex items-center gap-2 ml-4">
               {currentEngine&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-success rounded-full animate-pulse"/>{engines.find(e=>e.id===currentEngine)?.name||currentEngine}</span>}
               {currentTool&&<span className="text-amber-400 text-[10px] flex items-center gap-1"><span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/>⚡ {currentTool}...</span>}
               {typing&&<span className="text-gray-500 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"/>Generating...</span>}
               {loadingHistory&&<span className="text-gray-500">Loading...</span>}
+              <button onClick={toggleAuto247}
+                className={`ml-2 text-[10px] px-2 py-1 rounded-full transition-all ${auto247Mode ? 'bg-green-500/20 text-green-400 border border-green-500/40 animate-pulse' : 'text-gray-500 hover:text-gray-300 border border-app-elevated'}`}
+                title={auto247Mode ? '24/7 Auto active' : '24/7 Autonomous mode'}>
+                ♾️ 24/7
+              </button>
             </div>
             <div className="header-actions ml-auto flex items-center gap-1">
               {displayMessages.length>0&&(
@@ -1161,6 +1208,11 @@ img{max-width:100%;height:auto}`
           </div>
 
           <div ref={chatRef} className="chat-msgs flex-1 overflow-y-auto p-6 space-y-4">
+            {activeSession?.sessionId?.startsWith('telegram_') && displayMessages.length > 0 && (
+              <div className="text-center text-[10px] text-text-dim pb-2 border-b border-app-elevated mb-2">
+                📱 Telegram — {activeSession.sessionId.replace('telegram_','').replace(/_/g,' ')}
+              </div>
+            )}
             {displayMessages.length===0&&!loadingHistory&&(
               <div className="h-full flex items-center justify-center text-gray-600">
                 <div className="text-center space-y-2">

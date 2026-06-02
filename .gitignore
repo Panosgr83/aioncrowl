@@ -1,13 +1,65 @@
+# Dependencies
 node_modules/
-dist/
+frontend/node_modules/
 .vite/
-*.log
+
+# Build outputs
+frontend/dist/
+backend/*.txt
+*.egg-info/
+dist/
+build/
+
+# Environment
 .env
+.env.local
+.env.production
+
+# OS files
 .DS_Store
-sessions/
-uploads/
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg
+*.whl
+venv/
+.venv/
+*.so
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+.project
+.classpath
+
+# Project data (user-generated)
+sessions/
+uploads/
 knowledge/
 minimal-ui/
-backend/*.txt
+backend/perf.json
+backend/engine_perf.json
+backend/engine_status.json
+backend/token_usage.json
+backend/collab_log.json
+backend/project.json
+backend/.env
+
+# Logs
+*.log
+/tmp/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# System
+*.pid

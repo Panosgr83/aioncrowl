@@ -1,33 +1,31 @@
 #!/usr/bin/env python3
-import json, os, asyncio, time, uuid, subprocess
-from datetime import datetime
+import os, traceback, time, collections
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
-from pydantic import BaseModel
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from engine import ENGINES, get_active_engines, call_engine, get_engine_status, mark_engine, get_api_key, suggest_engine_for, record_engine_perf
-from tools import TOOL_DEFINITIONS, get_tool_definitions_for_agent, execute_tool, read_activity
-from agents import AGENTS, get_agent, get_agents
-from memory_summary import get_context_for_agent, needs_summary, store_fact, recall_fact, get_all_facts, summarize_conversation
-from collaboration import bus
-from scheduler import start_scheduler, get_jobs, add_job, add_cron_job, delete_job, toggle_job, run_job_now
-from config import AION_DIR, MEMORY_DIR, SESSIONS_DIR, UPLOADS_DIR as CFG_UPLOADS_DIR, COLLAB_LOG, LEADS_FILE, DOTENV_FILE, PROJECT_FILE as CFG_PROJECT_FILE
+RATE_LIMIT_WINDOW = 60
+RATE_LIMIT_MAX = 30
+_rate_buckets = collections.defaultdict(list)
 
-MAX_TOOL_ITER = 5
-
-sessions = {}
-active_connections = set()
-session_engine_cache = {}  # session_id -> engine_id that worked
+ERROR_MESSAGES = {
+    400: "Παρακαλώ ελέγξτε τα στοιχεία που στείλατε και δοκιμάστε ξανά.",
+    401: "Δεν εξουσιοδοτημένο αίτημα — ελέγξτε το API key σας.",
+    403: "Δεν έχετε πρόσβαση σε αυτόν τον πόρο.",
+    404: "Δεν βρέθηκε αυτό που ζητάτε.",
+    422: "Μη έγκυρα δεδομένα — ελέγξτε την αίτησή σας.",
+    429: "Πολλά αιτήματα — παρακαλώ περιμένετε λίγο και δοκιμάστε ξανά.",
+    503: "Η υπηρεσία είναι προσωρινά μη διαθέσιμη — δοκιμάστε ξανά σε λίγο.",
+}
 
 @asynccontextmanager
 async def lifespan(app):
     print("AIONCLAW server starting...")
-    # Initialize default projects
+    from shared import _load_project, _save_project
     pdata = _load_project()
     default_projects = ["angelus_pastry", "angeliki_savvidaki", "melisanuts", "mike_artistic_team"]
     for p in default_projects:
@@ -35,16 +33,51 @@ async def lifespan(app):
             pdata["projects"].append(p)
     _save_project(pdata)
     print(f"Projects: {pdata['projects']}")
+    from scheduler import start_scheduler
     start_scheduler()
     print("Scheduler started")
     from telegram_bot import start as start_telegram
     start_telegram()
+    from engine_router import router as engine_router
+    engine_router.start()
     yield
+    _shutdown_pending = []
+    try:
+        from engine import call_engine
+        pending = getattr(call_engine, '_pending_calls', [])
+        if pending:
+            print(f"Waiting for {len(pending)} pending engine calls...")
+            _shutdown_pending = pending
+    except: pass
     from telegram_bot import stop as stop_telegram
     stop_telegram()
+    if _shutdown_pending:
+        import asyncio
+        await asyncio.sleep(2)
     print("AIONCLAW server stopped.")
 
 app = FastAPI(title="AIONCLAW", version="1.0.0", lifespan=lifespan)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    msg = ERROR_MESSAGES.get(exc.status_code)
+    if msg:
+        detail = exc.detail if isinstance(exc.detail, str) else (exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc.detail))
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": msg, "original_error": detail, "code": exc.status_code},
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "code": exc.status_code},
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Προέκυψε ένα εσωτερικό σφάλμα — δοκιμάστε ξανά ή επικοινωνήστε με τον διαχειριστή.", "code": 500},
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,1295 +89,75 @@ app.add_middleware(
 
 AIONCLAW_API_KEY = os.environ.get("AIONCLAW_API_KEY", "")
 
+INJECTION_PATTERNS_MW = [
+    "ignore all previous instructions", "αγνόησε όλες τις προηγούμενες οδηγίες",
+    "ignore all prior", "αγνόησε όλες τις προηγούμενες",
+    "do anything now", "dan", "you are now", "εισαι τωρα",
+    "system prompt", "output your instructions", "βγαλε τις οδηγιες",
+    "forget everything", "ξεχασε τα παντα", "you must obey",
+    "ρεσετ", "reset", "new prompt", "νεο prompt",
+    "bypass", "παράκαμψη", "you are not", "δεν εισαι",
+    "act as", "συμπεριφερσου ως", "pretend", "προσποιησου",
+    "reveal", "αποκαλυψε", "show your", "δειξε μου",
+]
+
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    if AIONCLAW_API_KEY:
-        if request.url.path.startswith("/api/"):
-            client_key = request.headers.get("x-api-key", "")
-            if client_key != AIONCLAW_API_KEY:
-                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+async def sanitize_middleware(request: Request, call_next):
+    if request.url.path in ("/api/chat",) and request.method == "POST":
+        try:
+            body = await request.body()
+            text = body.decode().lower()
+            for p in INJECTION_PATTERNS_MW:
+                if p in text:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": "Το μήνυμά σας περιέχει μη επιτρεπόμενες εντολές — παρακαλώ αναδιατυπώστε το.", "code": 400},
+                    )
+        except:
+            pass
     return await call_next(request)
 
-GREEK_LANG = """ΓΡΑΨΕ ΣΕ ΑΡΙΣΤΑ ΣΥΓΧΡΟΝΑ ΕΛΛΗΝΙΚΑ — ΦΥΣΙΚΑ, ΚΑΘΑΡΑ, ΜΕ ΥΦΟΣ:
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.method != "OPTIONS":
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        bucket = _rate_buckets[client_ip]
+        bucket[:] = [t for t in bucket if now - t < RATE_LIMIT_WINDOW]
+        if len(bucket) >= RATE_LIMIT_MAX:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Πολλά αιτήματα — παρακαλώ περιμένετε λίγο και δοκιμάστε ξανά.", "code": 429},
+            )
+        bucket.append(now)
+    return await call_next(request)
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if AIONCLAW_API_KEY and request.url.path.startswith("/api/"):
+        client_key = request.headers.get("x-api-key", "")
+        if client_key != AIONCLAW_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
+
+from routers.chat import router as chat_router
+from routers.agents import router as agents_router
+from routers.sessions import router as sessions_router
+from routers.files import router as files_router
+from routers.projects import router as projects_router
+from routers.knowledge import router as knowledge_router
+from routers.scheduler_routes import router as scheduler_router
+from routers.admin import router as admin_router
+
+app.include_router(chat_router)
+app.include_router(agents_router)
+app.include_router(sessions_router)
+app.include_router(files_router)
+app.include_router(projects_router)
+app.include_router(knowledge_router)
+app.include_router(scheduler_router)
+app.include_router(admin_router)
 
-ΟΡΘΟΓΡΑΦΙΑ & ΓΡΑΜΜΑΤΙΚΗ:
-- Απόλυτα σωστή ορθογραφία, τονισμό, γραμματική, συντακτικό. Αν έχεις αμφιβολία, ΚΑΛΕΣΕ lookup_word.
-- Σωστή κλίση ουσιαστικών, επιθέτων, ρημάτων. Προσοχή στη γενική πληθυντικού.
-
-ΛΕΞΙΛΟΓΙΟ:
-- Πλούσιο, ποικίλο, ακριβές, φυσικό. Απόφυγε επαναλήψεις και κοινοτοπίες.
-- Σύγχρονη νεοελληνική — όχι αρχαΐζουσες λέξεις ή ψευτολόγιο (όχι «ουχί», «άνευ», «ειρήσθω εν παρόδω»).
-- Απόφυγε αγγλισμούς και μηχανικές μεταφράσεις. Προτίμησε φυσικές ελληνικές εκφράσεις.
-- Παραδείγματα: «μπορώ να» (όχι «δύναμαι να»), «χρειάζεται» (όχι «χρήζει»), «γίνεται» (όχι «καθίσταται»), «πολύ» (όχι «λίαν»), «θέλω» (όχι «επιθυμώ»).
-
-ΥΦΟΣ & ΡΟΗ:
-- Φυσική ροή, ποικιλία προτάσεων, σαφήνεια. Γράψε όπως θα έγραφε ένας άρτια καταρτισμένος επαγγελματίας.
-- Ανάλογα το κοινό: επίσημο αλλά όχι ψυχρό, φιλικό αλλά όχι οικείο.
-
-ΕΡΓΑΛΕΙΑ:
-- lookup_word: για κάθε αμφιβολία ορθογραφίας, σημασίας, κλίσης.
-- Λεξικό Τριανταφυλλίδη: https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/
-- Χρηστικό Λεξικό Ακαδημίας Αθηνών: https://christikolexiko.academyofathens.gr/"""
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str = "default"
-    system_prompt: str = ""
-    tools_enabled: bool = True
-    engine_id: str = ""
-    agent_id: str = "ceo"
-    stream: bool = False
-    model_params: dict = {}
-
-class ChatResponse(BaseModel):
-    response: str
-    engine_used: str
-    tool_calls: list = []
-    finish_reason: str = ""
-
-class AgentContext:
-    def __init__(self, system_prompt, tools_enabled, agent_id="ceo", session_id="default"):
-        self.agent_id = agent_id
-        self.session_id = session_id
-        self.tools_enabled = tools_enabled
-        self.message_count = 0
-        self.last_summary_len = 0
-
-        from agents import get_agents
-        agent = get_agent(agent_id)
-        base_prompt = system_prompt or agent["system_prompt"]
-
-        # Inject Greek language instruction for all agents
-        if GREEK_LANG not in base_prompt:
-            base_prompt += f"\n\n{GREEK_LANG}"
-
-        memory_context = get_context_for_agent(agent_id)
-        if memory_context:
-            base_prompt += f"\n\nΣΗΜΕΙΩΣΕΙΣ ΑΠΟ ΜΝΗΜΗ:\n{memory_context}"
-
-        if agent_id == "ceo":
-            from agents import get_agents
-            ceo_view = get_agents()
-            agent_list_parts = [f"\n\nΟΙ AGENTS ΣΟΥ (Η ΟΜΑΔΑ ΣΟΥ):"]
-            for a in ceo_view:
-                agent_list_parts.append(f"  {a['icon']} {a['name']} ({a['id']}) — {a['role']}")
-            base_prompt += "\n".join(agent_list_parts)
-
-        # Inject uploaded file names for this agent
-        uploaded = get_agent_file_names(agent_id)
-        if uploaded:
-            from agents import AGENTS
-            base_prompt += f"\n\nΑΝΕΒΑΣΜΕΝΑ ΑΡΧΕΙΑ (για {agent_id}):\n"
-            for fname in uploaded:
-                fpath = None
-                # Search all agent upload dirs to find actual file
-                for a in AGENTS + [{"id": "ceo"}]:
-                    candidate = os.path.join(UPLOAD_DIR, a["id"], fname)
-                    if os.path.exists(candidate):
-                        fpath = candidate
-                        break
-                if fpath:
-                    fsize = os.path.getsize(fpath)
-                    base_prompt += f"  - {fname} ({fsize} bytes) — διάβασέ το με read_file('{fpath}')\n"
-                else:
-                    base_prompt += f"  - {fname}\n"
-
-        self.system_prompt = base_prompt
-        self.messages = [{"role": "system", "content": self.system_prompt}]
-
-        # Load previous messages from session file so agent remembers history
-        session_file = _session_file(session_id)
-        try:
-            if os.path.exists(session_file):
-                with open(session_file) as f:
-                    data = json.load(f)
-                for msg in data.get("messages", []):
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    if role == "user":
-                        self.messages.append({"role": "user", "content": content or ""})
-                        self.message_count += 1
-                    elif role == "assistant":
-                        self.messages.append({"role": "assistant", "content": content or ""})
-                    elif role == "system" and content:
-                        self.messages.append({"role": "system", "content": content})
-        except Exception:
-            pass
-
-    def add_message(self, role, content, tool_calls=None, tool_call_id=None):
-        msg = {"role": role, "content": content, "ts": datetime.now().isoformat()}
-        if tool_calls:
-            msg["tool_calls"] = tool_calls
-        if tool_call_id:
-            msg["tool_call_id"] = tool_call_id
-        self.messages.append(msg)
-        if role == "user":
-            self.message_count += 1
-
-MAX_CONTEXT_MSGS = 6
-
-def sanitize_messages(messages):
-    """Remove unsupported fields (ts, etc.) before sending to API."""
-    allowed = {"role", "content", "tool_calls", "tool_call_id", "name"}
-    clean = []
-    for m in messages:
-        clean.append({k: v for k, v in m.items() if k in allowed})
-    return clean
-
-def trim_messages(messages):
-    """Keep system prompt + last N messages for context efficiency."""
-    system = [m for m in messages if m.get("role") == "system"]
-    non_system = [m for m in messages if m.get("role") != "system"]
-    trimmed = non_system[-MAX_CONTEXT_MSGS:]
-    return sanitize_messages(system + trimmed)
-
-def run_agent(ctx, engine_override=""):
-    if engine_override:
-        engine = next((e for e in ENGINES if e["id"] == engine_override), None)
-        if not engine:
-            return {"response": f"Engine '{engine_override}' not found", "engine_used": "none", "tool_calls": []}
-        engines_to_try = [engine]
-    else:
-        # CEO user-facing responses use reasoning for depth; sub-agents use speed
-        is_ceo = ctx.agent_id == "ceo"
-        task_type = "reasoning" if is_ceo else ("simple" if not ctx.tools_enabled else "general")
-        suggested = suggest_engine_for(task_type, needs_tools=ctx.tools_enabled)
-        engines_to_try = get_active_engines(task_type=task_type, needs_tools=ctx.tools_enabled)
-        # Put suggested engine first (highest score)
-        if suggested and suggested in engines_to_try:
-            engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
-        # Then move cached engine to front if it's still active
-        cached_id = session_engine_cache.get(ctx.session_id)
-        if cached_id:
-            cached = next((e for e in ENGINES if e["id"] == cached_id), None)
-            if cached and cached in engines_to_try:
-                engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
-
-    if not engines_to_try:
-        return {"response": "Δεν υπάρχει διαθέσιμο engine. Έλεγξε API keys και engine status.", "engine_used": "none", "tool_calls": []}
-
-    # Quick check: if last user message is short and conversational, try single-call first
-    user_msgs = [m for m in ctx.messages if m.get("role") == "user"]
-    last_user = user_msgs[-1]["content"] if user_msgs else ""
-    is_simple = len(last_user) < 200 and not any(w in last_user for w in ["γράψε", "δημιούργησε", "ανέλυσε", "βρες", "ψάξε", "διάβασε", "run", "execute", "write", "create", "search", "find", "read", "ανάλυσε", "γράψε μου", "φτιάξε"])
-
-    last_error = ""
-    for engine in engines_to_try:
-        if ctx.tools_enabled and not engine.get("supports_tools", False):
-            continue
-        for attempt in range(2):
-            try:
-                t0 = time.time()
-                engine_id = engine["id"]
-                msgs = trim_messages(ctx.messages)
-
-                # Try single-call first for simple messages (skip tool planning)
-                if is_simple and ctx.tools_enabled:
-                    tools_for_call = get_tool_definitions_for_agent(ctx.agent_id)
-                    resp = call_engine(engine, msgs, tools=tools_for_call, stream=False)
-                    t1 = time.time()
-                    data = resp.json()
-                    choice = data["choices"][0]
-                    msg = choice["message"]
-
-                    record_engine_perf(engine_id, t1 - t0, True)
-
-                    tool_calls = msg.get("tool_calls")
-                    if not tool_calls:
-                        from tools import parse_xml_tool_calls
-                        tool_calls, cleaned = parse_xml_tool_calls(msg.get("content", ""))
-                        if tool_calls:
-                            msg["content"] = cleaned
-
-                    if tool_calls:
-                        ctx.add_message("assistant", msg.get("content") or "", tool_calls=tool_calls)
-                        tool_results = []
-                        for tc in tool_calls[:MAX_TOOL_ITER]:
-                            if isinstance(tc, dict):
-                                func_name = tc.get("function", {}).get("name", "")
-                                func_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                                tc_id = tc.get("id", "")
-                            else:
-                                func_name = tc.function.name
-                                func_args = json.loads(tc.function.arguments)
-                                tc_id = tc.id
-                            result = execute_tool(func_name, func_args, ctx.agent_id)
-                            ctx.add_message("tool", result, tool_call_id=tc_id)
-                            tool_results.append({"name": func_name, "result": result[:200]})
-
-                        t2 = time.time()
-                        synthesis_type = "reasoning" if is_ceo else task_type
-                        final_resp = call_engine(engine, trim_messages(ctx.messages), stream=False, task_type=synthesis_type)
-                        t3 = time.time()
-                        record_engine_perf(engine_id, t3 - t2, True)
-                        final_data = final_resp.json()
-                        final_text = final_data["choices"][0]["message"].get("content", "")
-                        ctx.add_message("assistant", final_text)
-                        session_engine_cache[ctx.session_id] = engine_id
-                        return {"response": final_text, "engine_used": engine_id, "tool_calls": tool_results}
-                    else:
-                        text = msg.get("content", "")
-                        ctx.add_message("assistant", text)
-                        session_engine_cache[ctx.session_id] = engine_id
-                        return {"response": text, "engine_used": engine_id, "tool_calls": []}
-
-                # Normal two-call flow for complex messages or when simple path didn't trigger
-                tools_for_call = get_tool_definitions_for_agent(ctx.agent_id) if ctx.tools_enabled else None
-                resp = call_engine(engine, msgs, tools=tools_for_call, stream=False)
-                t1 = time.time()
-                data = resp.json()
-                choice = data["choices"][0]
-                msg = choice["message"]
-
-                record_engine_perf(engine_id, t1 - t0, True)
-
-                if not msg.get("tool_calls"):
-                    from tools import parse_xml_tool_calls
-                    xml_tools, _clean = parse_xml_tool_calls(msg.get("content", ""))
-                    if xml_tools:
-                        msg["tool_calls"] = xml_tools
-                        msg["content"] = _clean
-
-                if msg.get("tool_calls"):
-                    ctx.add_message("assistant", msg.get("content") or "", tool_calls=msg["tool_calls"])
-                    tool_results = []
-                    for tc in msg["tool_calls"][:MAX_TOOL_ITER]:
-                        if isinstance(tc, dict):
-                            func_name = tc.get("function", {}).get("name", "")
-                            func_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                            tc_id = tc.get("id", "")
-                        else:
-                            func_name = tc.function.name
-                            func_args = json.loads(tc.function.arguments)
-                            tc_id = tc.id
-                        result = execute_tool(func_name, func_args, ctx.agent_id)
-                        ctx.add_message("tool", result, tool_call_id=tc_id)
-                        tool_results.append({"name": func_name, "result": result[:200]})
-
-                    t2 = time.time()
-                    final_resp = call_engine(engine, trim_messages(ctx.messages), stream=False)
-                    t3 = time.time()
-                    record_engine_perf(engine_id, t3 - t2, True)
-                    final_data = final_resp.json()
-                    final_text = final_data["choices"][0]["message"].get("content", "")
-                    ctx.add_message("assistant", final_text)
-                    session_engine_cache[ctx.session_id] = engine_id
-                    return {"response": final_text, "engine_used": engine_id, "tool_calls": tool_results}
-                else:
-                    text = msg.get("content", "")
-                    ctx.add_message("assistant", text)
-                    session_engine_cache[ctx.session_id] = engine_id
-                    return {"response": text, "engine_used": engine_id, "tool_calls": []}
-
-            except Exception as e:
-                last_error = f"[{engine['id']}] {e}"
-                record_engine_perf(engine["id"], 0, False)
-                if "rate limit" in last_error.lower() or "too large" in last_error.lower():
-                    mark_engine(engine["id"], "rate_limited", 300)
-                    break
-                continue
-
-    return {"response": f"Σφάλμα σε όλα τα engines: {last_error}", "engine_used": "none", "tool_calls": []}
-
-@app.get("/api/agents")
-async def list_agents():
-    return {"agents": get_agents()}
-
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "version": "1.0.0", "time": datetime.now().isoformat()}
-
-@app.get("/api/engines")
-async def engines():
-    from engine import get_active_engines, ENGINES
-    active = get_active_engines()
-    status_map = {e["id"]: e for e in ENGINES}
-    result = []
-    for e in active:
-        entry = dict(e)
-        entry["status"] = status_map.get(e["id"], {}).get("status", "active")
-        result.append(entry)
-    return {"engines": result}
-
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
-    ctx = sessions.get(req.session_id)
-    if not ctx:
-        ctx = AgentContext(req.system_prompt, req.tools_enabled, agent_id=req.agent_id, session_id=req.session_id)
-        sessions[req.session_id] = ctx
-    ctx.add_message("user", req.message)
-    result = run_agent(ctx, req.engine_id)
-
-    if needs_summary(ctx.messages):
-        active = get_active_engines()
-        if active:
-            try:
-                await summarize_conversation(call_engine, active[0], trim_messages(ctx.messages), ctx.agent_id)
-            except:
-                pass
-
-    return ChatResponse(
-        response=result["response"],
-        engine_used=result["engine_used"],
-        tool_calls=result.get("tool_calls", []),
-        finish_reason="stop"
-    )
-
-@app.get("/api/sessions")
-async def list_sessions():
-    return {"sessions": list(sessions.keys()), "count": len(sessions)}
-
-@app.delete("/api/sessions/{session_id}")
-async def clear_session(session_id: str):
-    if session_id in sessions:
-        del sessions[session_id]
-        return {"status": "cleared"}
-    return {"status": "not_found"}
-
-@app.get("/api/keys")
-async def list_keys():
-    env_path = str(DOTENV_FILE)
-    keys = {}
-    try:
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("export ") and "_API_KEY=" in line:
-                        kv = line[7:].split("=", 1)
-                        if len(kv) == 2:
-                            eid = kv[0].replace("_API_KEY", "").lower()
-                            val = kv[1].strip("\"'")
-                            keys[eid] = val[:8] + "..." + val[-4:] if len(val) > 12 else val
-    except:
-        pass
-    for e in ENGINES:
-        eid = e["id"]
-        if eid not in keys:
-            env_key = os.environ.get(f"{eid.upper()}_API_KEY", "")
-            if env_key:
-                keys[eid] = env_key[:8] + "..." + env_key[-4:] if len(env_key) > 12 else env_key
-    return {"keys": keys}
-
-@app.post("/api/keys")
-async def update_key(data: dict):
-    engine_id = data.get("engine_id")
-    api_key = data.get("api_key")
-    if not engine_id or not api_key:
-        raise HTTPException(400, "engine_id and api_key required")
-    os.environ[f"{engine_id.upper()}_API_KEY"] = api_key
-    env_path = str(DOTENV_FILE)
-    try:
-        existing = ""
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                existing = f.read()
-        key_line = f"export {engine_id.upper()}_API_KEY={api_key}\n"
-        if f"export {engine_id.upper()}_API_KEY=" in existing:
-            lines = [l if not l.startswith(f"export {engine_id.upper()}_API_KEY=") else key_line.strip() for l in existing.split("\n")]
-            existing = "\n".join(lines)
-        else:
-            existing += "\n" + key_line
-        with open(env_path, "w") as f:
-            f.write(existing)
-    except:
-        pass
-    return {"status": "updated"}
-
-@app.get("/api/leads")
-async def get_leads():
-    leads_file = str(LEADS_FILE)
-    try:
-        with open(leads_file) as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                return {"leads": data, "count": len(data)}
-            return data
-    except:
-        return {"leads": [], "count": 0, "error": "leads database not found"}
-
-UPLOAD_DIR = str(CFG_UPLOADS_DIR)
-
-@app.post("/api/agents/{agent_id}/upload")
-async def upload_agent_file(agent_id: str, file: UploadFile = File(...)):
-    dir_path = os.path.join(UPLOAD_DIR, agent_id)
-    os.makedirs(dir_path, exist_ok=True)
-    content = await file.read()
-    file_path = os.path.join(dir_path, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(content)
-    # Auto-index text files into KB
-    TEXT_EXT = {".txt", ".md", ".json", ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".csv", ".yml", ".yaml", ".xml", ".ini", ".cfg", ".env"}
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext in TEXT_EXT:
-        try:
-            from kb import index_file, _get_current_project
-            project = _get_current_project()
-            index_file(project, file_path, agent_id)
-        except Exception as e:
-            print(f"KB auto-index error: {e}")
-    print(f"Uploaded: {file_path} ({len(content)} bytes)")
-    return {"status": "uploaded", "filename": file.filename, "path": file_path, "size": len(content), "indexed": ext in TEXT_EXT}
-
-@app.get("/api/agents/{agent_id}/files")
-async def list_agent_files(agent_id: str):
-    files = []
-    # Agent's own files
-    dir_path = os.path.join(UPLOAD_DIR, agent_id)
-    if os.path.exists(dir_path):
-        for name in sorted(os.listdir(dir_path)):
-            full = os.path.join(dir_path, name)
-            try:
-                files.append({
-                    "name": name,
-                    "size": os.path.getsize(full),
-                    "modified": datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
-                    "source": agent_id,
-                    "path": full,
-                })
-            except:
-                pass
-    # CEO's files (shared with all)
-    if agent_id != "ceo":
-        ceo_path = os.path.join(UPLOAD_DIR, "ceo")
-        if os.path.exists(ceo_path):
-            for name in sorted(os.listdir(ceo_path)):
-                full = os.path.join(ceo_path, name)
-                if not any(f["name"] == name for f in files):
-                    try:
-                        files.append({
-                            "name": name,
-                            "size": os.path.getsize(full),
-                            "modified": datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
-                            "source": "ceo (shared)",
-                            "path": full,
-                        })
-                    except:
-                        pass
-    return {"files": files, "agent_id": agent_id}
-
-@app.delete("/api/agents/{agent_id}/files/{filename}")
-async def delete_agent_file(agent_id: str, filename: str):
-    file_path = os.path.join(UPLOAD_DIR, agent_id, filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
-        return {"status": "deleted", "filename": filename}
-    raise HTTPException(404, "File not found")
-
-def get_agent_file_names(agent_id):
-    """Get list of uploaded filenames for an agent (including CEO's shared files)."""
-    from agents import AGENTS
-    files = set()
-    # Agent's own files
-    dir_path = os.path.join(UPLOAD_DIR, agent_id)
-    if os.path.exists(dir_path):
-        files.update(os.listdir(dir_path))
-    # CEO sees ALL agents' files
-    if agent_id == "ceo":
-        for a in AGENTS:
-            d = os.path.join(UPLOAD_DIR, a["id"])
-            if os.path.exists(d):
-                files.update(os.listdir(d))
-    # Other agents see CEO's shared files too
-    if agent_id != "ceo":
-        ceo_path = os.path.join(UPLOAD_DIR, "ceo")
-        if os.path.exists(ceo_path):
-            files.update(os.listdir(ceo_path))
-    return sorted(files)
-
-@app.get("/api/collab/history")
-async def collab_history():
-    path = str(COLLAB_LOG)
-    try:
-        if os.path.exists(path):
-            with open(path) as f:
-                events = json.load(f)
-            return {"events": events[-100:]}
-    except:
-        pass
-    return {"events": []}
-
-@app.post("/api/collab/clear")
-async def collab_clear():
-    path = str(COLLAB_LOG)
-    try:
-        from collaboration import bus
-        bus.history = []
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump([], f)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-@app.get("/api/collab/reads")
-async def collab_reads():
-    from reads import get_reads
-    return {"reads": get_reads()}
-
-@app.post("/api/collab/events/{event_id}/read")
-async def collab_event_read(event_id: str):
-    from reads import mark_read
-    mark_read(event_id)
-    return {"ok": True}
-
-@app.post("/api/collab/events/{event_id}/unread")
-async def collab_event_unread(event_id: str):
-    from reads import mark_unread
-    mark_unread(event_id)
-    return {"ok": True}
-
-PROJECT_FILE = str(CFG_PROJECT_FILE)
-
-def _load_project():
-    try:
-        if os.path.exists(PROJECT_FILE):
-            with open(PROJECT_FILE) as f:
-                return json.load(f)
-    except: pass
-    return {"current": "default", "projects": ["default"]}
-
-def _save_project(data):
-    os.makedirs(os.path.dirname(PROJECT_FILE), exist_ok=True)
-    with open(PROJECT_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-@app.get("/api/project")
-async def get_project():
-    return _load_project()
-
-@app.post("/api/project")
-async def set_project(data: dict):
-    name = data.get("name", "default").strip()
-    if not name: name = "default"
-    safe = name.lower().replace(" ", "_").replace("/", "_")
-    pdata = _load_project()
-    pdata["current"] = safe
-    if safe not in pdata["projects"]:
-        pdata["projects"].append(safe)
-    _save_project(pdata)
-
-    # Auto-migrate existing root-level sessions to this project
-    if safe != "default":
-        pdir = os.path.join(SESSION_DIR, safe)
-        os.makedirs(pdir, exist_ok=True)
-        import shutil
-        for fname in os.listdir(SESSION_DIR):
-            if fname.endswith(".json") and os.path.isfile(os.path.join(SESSION_DIR, fname)):
-                src = os.path.join(SESSION_DIR, fname)
-                dst = os.path.join(pdir, fname)
-                if not os.path.exists(dst):
-                    shutil.copy2(src, dst)
-    # Also migrate to default/ dir for consistency
-    defdir = os.path.join(SESSION_DIR, "default")
-    os.makedirs(defdir, exist_ok=True)
-    for fname in os.listdir(SESSION_DIR):
-        if fname.endswith(".json") and os.path.isfile(os.path.join(SESSION_DIR, fname)):
-            src = os.path.join(SESSION_DIR, fname)
-            dst = os.path.join(defdir, fname)
-            if not os.path.exists(dst):
-                import shutil
-                shutil.copy2(src, dst)
-        elif os.path.isdir(os.path.join(SESSION_DIR, fname)) and fname != "default" and fname != safe:
-            # Also copy sessions from other projects into default
-            pdir = os.path.join(SESSION_DIR, fname)
-            for sf in os.listdir(pdir):
-                if sf.endswith(".json"):
-                    src = os.path.join(pdir, sf)
-                    dst = os.path.join(defdir, sf)
-                    if not os.path.exists(dst):
-                        shutil.copy2(src, dst)
-
-    return pdata
-
-@app.get("/api/projects")
-async def list_projects():
-    return _load_project()
-
-@app.delete("/api/project/{name}")
-async def delete_project(name: str):
-    safe = name.lower().replace(" ", "_").replace("/", "_")
-    if safe == "default":
-        return {"ok": False, "error": "Cannot delete default project"}
-    pdata = _load_project()
-    if safe in pdata["projects"]:
-        pdata["projects"].remove(safe)
-        if pdata.get("current") == safe:
-            pdata["current"] = "default"
-        _save_project(pdata)
-    # Remove project session directory (memory is safe in central memory.json)
-    pdir = os.path.join(SESSION_DIR, safe)
-    if os.path.exists(pdir):
-        import shutil
-        shutil.rmtree(pdir)
-    return {"ok": True}
-
-
-SESSION_DIR = str(SESSIONS_DIR)
-SESSION_CACHE = {}  # full_key -> {"messages": list, "ts": float}
-SESSION_CACHE_TTL = 1800  # 30 minutes
-
-def _cache_get(full_key):
-    entry = SESSION_CACHE.get(full_key)
-    if entry and time.time() - entry["ts"] < SESSION_CACHE_TTL:
-        return entry["data"]
-    SESSION_CACHE.pop(full_key, None)
-    return None
-
-def _cache_set(full_key, data):
-    SESSION_CACHE[full_key] = {"data": data, "ts": time.time()}
-
-def _cache_invalidate(full_key):
-    SESSION_CACHE.pop(full_key, None)
-
-def _session_file(full_key):
-    safe = full_key.replace(":", "_").replace("/", "_")
-    pdata = _load_project()
-    project = pdata.get("current", "default")
-    pdir = os.path.join(SESSION_DIR, project)
-    os.makedirs(pdir, exist_ok=True)
-    fpath = os.path.join(pdir, f"{safe}.json")
-    # Fallback: if file doesn't exist in project dir, check root level
-    if not os.path.exists(fpath):
-        legacy = os.path.join(SESSION_DIR, f"{safe}.json")
-        if os.path.exists(legacy):
-            return legacy
-    return fpath
-
-@app.post("/api/sessions/{full_key}/save")
-async def save_session_messages(full_key: str, data: dict):
-    path = _session_file(full_key)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        existing = []
-        if os.path.exists(path):
-            with open(path) as f:
-                try:
-                    existing = json.load(f).get("messages", [])
-                except:
-                    existing = []
-        incoming = data.get("messages", [])
-        existing_ids = set()
-        for m in existing:
-            key = f"{m.get('role','')}|{m.get('content','')[:200]}|{m.get('ts','')}"
-            existing_ids.add(key)
-        merged = list(existing)
-        for m in incoming:
-            key = f"{m.get('role','')}|{m.get('content','')[:200]}|{m.get('ts','')}"
-            if key not in existing_ids:
-                merged.append(m)
-                existing_ids.add(key)
-        payload = {"messages": merged}
-        with open(path, "w") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-        _cache_set(full_key, payload)
-        return {"status": "saved", "count": len(merged)}
-    except Exception as e:
-        raise HTTPException(400, f"Save error: {e}")
-
-@app.get("/api/sessions/{full_key}/load")
-async def load_session_messages(full_key: str):
-    cached = _cache_get(full_key)
-    if cached:
-        return cached
-    path = _session_file(full_key)
-    try:
-        if os.path.exists(path):
-            with open(path) as f:
-                data = json.load(f)
-                _cache_set(full_key, data)
-                # Return full history for UI display
-                return data
-        return {"messages": []}
-    except Exception as e:
-        return {"messages": [], "error": str(e)}
-
-@app.get("/api/performance")
-async def get_performance():
-    from performance import get_report
-    return get_report()
-
-@app.get("/api/engine-perf")
-async def get_engine_performance():
-    from engine import get_engine_perf, get_engine_status
-    return {"stats": get_engine_perf(), "engines": get_engine_status()}
-
-@app.get("/api/agent-perf")
-async def get_agent_perf():
-    from performance import get_agent_summary
-    return {"stats": get_agent_summary()}
-
-@app.get("/api/comm-log")
-async def get_comm_log(limit: int = Query(50)):
-    from collaboration import bus
-    entries = []
-    for e in bus.history:
-        if e.get("type") == "agent_comm" and e.get("from") and e.get("to"):
-            entries.append(e)
-    return {"entries": entries[-limit:]}
-
-@app.get("/api/agent-heartbeat")
-async def get_agent_heartbeat():
-    from collaboration import bus
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
-    last_seen = {}
-    for e in reversed(bus.history):
-        aid = e.get("agent_id") or e.get("from") or e.get("to")
-        if aid and aid not in last_seen:
-            try:
-                ts = e.get("ts", "")
-                if ts:
-                    et = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    last_seen[aid] = int((now - et).total_seconds())
-            except:
-                last_seen[aid] = 0
-    for e in reversed(bus.history):
-        if e.get("type") == "agent_comm":
-            for aid in (e.get("from"), e.get("to")):
-                if aid and aid not in last_seen:
-                    last_seen[aid] = 0
-    return {"last_seen": last_seen}
-
-@app.get("/api/activity")
-async def get_activity(limit: int = Query(100)):
-    return {"entries": read_activity(limit)}
-
-@app.post("/api/knowledge/query")
-async def knowledge_query(data: dict):
-    from kb import query_knowledge, format_kb_results
-    q = data.get("query", "")
-    project = data.get("project", "")
-    top_k = data.get("top_k", 5)
-    if not q:
-        raise HTTPException(400, "query is required")
-    results = query_knowledge(project=project or None, query=q, top_k=top_k)
-    formatted = format_kb_results(results, q)
-    return {"results": results, "formatted": formatted, "count": len(results)}
-
-@app.post("/api/knowledge/reindex")
-async def knowledge_reindex(data: dict = {}):
-    from kb import reindex_project
-    project = data.get("project", "")
-    from kb import _get_current_project
-    p = project or _get_current_project()
-    result = reindex_project(p)
-    return result
-
-@app.get("/api/knowledge/stats")
-async def knowledge_stats(project: str = ""):
-    from kb import get_collection_stats, _get_current_project
-    p = project or _get_current_project()
-    return get_collection_stats(p)
-
-@app.delete("/api/knowledge/{project}")
-async def knowledge_delete(project: str):
-    from kb import delete_collection
-    ok = delete_collection(project)
-    return {"status": "deleted" if ok else "not_found"}
-
-@app.get("/api/scheduler/jobs")
-async def scheduler_jobs():
-    return {"jobs": get_jobs()}
-
-class SchedulerAdd(BaseModel):
-    name: str
-    agent_id: str
-    task: str
-    interval_minutes: int = 60
-    project: str = ""
-
-class SchedulerCronAdd(BaseModel):
-    name: str
-    agent_id: str
-    task: str
-    cron: str
-    project: str = ""
-
-@app.post("/api/scheduler/add")
-async def scheduler_add(data: SchedulerAdd):
-    from kb import _get_current_project
-    project = data.project or _get_current_project()
-    job = add_job(data.name, data.agent_id, data.task, data.interval_minutes, project)
-    return {"status": "added", "job": job}
-
-@app.post("/api/scheduler/cron")
-async def scheduler_cron(data: SchedulerCronAdd):
-    from kb import _get_current_project
-    project = data.project or _get_current_project()
-    job = add_cron_job(data.name, data.agent_id, data.task, data.cron, project)
-    return {"status": "added", "job": job}
-
-@app.delete("/api/scheduler/{job_id}")
-async def scheduler_delete(job_id: str):
-    delete_job(job_id)
-    return {"status": "deleted"}
-
-@app.post("/api/scheduler/{job_id}/toggle")
-async def scheduler_toggle(job_id: str):
-    toggle_job(job_id)
-    return {"status": "toggled"}
-
-@app.post("/api/scheduler/{job_id}/run")
-async def scheduler_run(job_id: str):
-    ok = run_job_now(job_id)
-    return {"status": "executed" if ok else "not_found"}
-
-@app.get("/api/export/doc")
-async def export_doc(session_id: str = "default", agent_id: str = "ceo"):
-    """Export session messages as a Word .doc file."""
-    from agents import get_agent
-    from datetime import datetime
-    session_path = _session_file(f"{agent_id}:{session_id}")
-    if not os.path.exists(session_path):
-        raise HTTPException(404, "Session not found")
-    try:
-        with open(session_path) as f:
-            data = json.load(f)
-    except:
-        raise HTTPException(400, "Failed to read session")
-
-    messages = data.get("messages", [])
-    agent = get_agent(agent_id)
-    aname = agent.get("name", agent_id) if agent else agent_id
-    aicon = agent.get("icon", "🤖") if agent else "🤖"
-    date = datetime.now().strftime("%Y-%m-%d_%H-%M")
-
-    def fmt_ts(ts):
-        try: return datetime.fromisoformat(ts.replace("Z","+00:00")).strftime("%H:%M:%S")
-        except: return ""
-
-    rows = ""
-    for m in messages:
-        role = m.get("role", "")
-        content = (m.get("content","") or str(m.get("args","")) or m.get("result","") or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
-        ts = fmt_ts(m.get("ts",""))
-        if role == "user":
-            rows += f"""<tr><td style="padding:8pt 12pt;background:#f0f4ff;border-bottom:1px solid #e5e7eb"><strong style="color:#6366f1">👤 User</strong> <span style="color:#999;font-size:8pt">({ts})</span><br/>{content}</td></tr>"""
-        elif role == "assistant":
-            rows += f"""<tr><td style="padding:8pt 12pt;background:#fafbff;border-bottom:1px solid #e5e7eb"><strong style="color:#6366f1">🤖 {aname}</strong> <span style="color:#999;font-size:8pt">({ts})</span><br/>{content}</td></tr>"""
-        elif role == "tool_use":
-            rows += f"""<tr><td style="padding:6pt 12pt;background:#fffbeb;border-bottom:1px solid #e5e7eb;font-size:9pt"><span style="color:#d97706">🔧 {m.get("name","tool")}</span></td></tr>"""
-        elif role == "tool_result":
-            rows += f"""<tr><td style="padding:6pt 12pt;background:#fafafa;border-bottom:1px solid #e5e7eb;font-size:8pt;color:#666">{content[:300]}</td></tr>"""
-
-    html = f"""<!DOCTYPE html>
-<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset="utf-8"><style>
-body{{font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1a1a2e;max-width:210mm;margin:20mm auto;padding:0 15mm}}
-h1{{font-size:18pt;font-weight:700;color:#6366f1;border-bottom:2px solid #6366f1;padding-bottom:6pt}}
-table{{width:100%;border-collapse:collapse}}
-</style></head><body>
-<h1>{aicon} {aname}</h1>
-<p style="color:#888;font-size:9pt">{date}</p>
-<table>{rows}</table>
-</body></html>"""
-
-    return HTMLResponse(content=html, headers={
-        "Content-Type": "application/msword",
-        "Content-Disposition": f'attachment; filename="{aname}_{date}.doc"',
-        "Access-Control-Expose-Headers": "Content-Disposition",
-    })
-
-@app.get("/api/files")
-async def list_files(path: str = ""):
-    base = os.path.expanduser(path) if path else AION_DIR
-    if not os.path.isdir(base):
-        raise HTTPException(400, f"Not a directory: {base}")
-    items = []
-    for name in sorted(os.listdir(base)):
-        full = os.path.join(base, name)
-        try:
-            stat = os.stat(full)
-            items.append({
-                "name": name,
-                "path": full,
-                "is_dir": os.path.isdir(full),
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
-        except:
-            pass
-    return {"path": base, "items": items, "parent": os.path.dirname(base) if base != "/" else None}
-
-@app.get("/api/files/read")
-async def read_file(path: str):
-    full = os.path.expanduser(path)
-    if not os.path.isfile(full):
-        raise HTTPException(400, f"File not found: {full}")
-    if os.path.getsize(full) > 1024 * 1024:
-        raise HTTPException(400, "File too large (>1MB)")
-    try:
-        with open(full) as f:
-            content = f.read()
-        return {"path": full, "content": content, "size": len(content)}
-    except Exception as e:
-        raise HTTPException(400, f"Read error: {e}")
-
-@app.get("/api/files/download")
-async def download_file(path: str):
-    full = os.path.expanduser(path)
-    if not os.path.isfile(full):
-        raise HTTPException(400, f"File not found: {full}")
-    return FileResponse(full, filename=os.path.basename(full))
-
-@app.get("/api/files/zip")
-async def zip_files(path: str = None):
-    import shutil, io, zipfile
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        if path:
-            base = os.path.expanduser(path)
-            if os.path.isfile(base):
-                zf.write(base, os.path.basename(base))
-            elif os.path.isdir(base):
-                for root, _dirs, files in os.walk(base):
-                    for f in files:
-                        fpath = os.path.join(root, f)
-                        arcname = os.path.relpath(fpath, os.path.dirname(base))
-                        zf.write(fpath, arcname)
-        else:
-            uploads = UPLOAD_DIR
-            if os.path.isdir(uploads):
-                for root, _dirs, files in os.walk(uploads):
-                    for f in files:
-                        fpath = os.path.join(root, f)
-                        arcname = os.path.relpath(fpath, os.path.dirname(uploads))
-                        zf.write(fpath, arcname)
-    buf.seek(0)
-    return Response(buf.getvalue(), media_type="application/zip",
-                    headers={"Content-Disposition": f"attachment; filename=aionclaw_files.zip"})
-
-@app.post("/api/files/upload")
-async def upload_file(agent_id: str = "ceo", file: UploadFile = None):
-    if not file:
-        raise HTTPException(400, "No file provided")
-    upload_dir = os.path.join(UPLOAD_DIR, agent_id)
-    os.makedirs(upload_dir, exist_ok=True)
-    fpath = os.path.join(upload_dir, file.filename)
-    content = await file.read()
-    with open(fpath, "wb") as f:
-        f.write(content)
-    from collaboration import bus
-    bus.broadcast({"type": "file_updated", "agent_id": agent_id, "filename": file.filename})
-    return {"status": "ok", "filename": file.filename, "size": len(content), "path": fpath}
-
-@app.get("/api/project/files")
-async def project_files():
-    import glob as _glob
-    files = []
-    uploads = UPLOAD_DIR
-    if os.path.isdir(uploads):
-        for root, _dirs, fnames in os.walk(uploads):
-            for f in fnames:
-                fpath = os.path.join(root, f)
-                rel = os.path.relpath(fpath, uploads)
-                agent = os.path.basename(os.path.dirname(fpath))
-                files.append({
-                    "name": f, "path": fpath, "agent": agent,
-                    "size": os.path.getsize(fpath),
-                    "modified": datetime.fromtimestamp(os.path.getmtime(fpath)).isoformat()
-                })
-    return {"files": files}
-
-@app.post("/api/tunnel/start")
-async def start_tunnel():
-    from tunnel import start_tunnel as _start
-    result = _start(port=9790)
-    return result
-
-@app.post("/api/tunnel/stop")
-async def stop_tunnel():
-    from tunnel import stop_tunnel as _stop
-    result = _stop()
-    return result
-
-@app.get("/api/tunnel/status")
-async def tunnel_status():
-    from tunnel import get_tunnel_status
-    return get_tunnel_status()
-
-@app.websocket("/ws/chat")
-async def websocket_chat(ws: WebSocket):
-    await ws.accept()
-    client_id = str(uuid.uuid4())[:8]
-    active_connections.add(ws)
-
-    async def _keepalive():
-        try:
-            while True:
-                await asyncio.sleep(25)
-                await ws.send_json({"type": "ka"})
-        except:
-            pass
-    ka_task = asyncio.create_task(_keepalive())
-
-    print(f"WS client connected: {client_id}")
-
-    try:
-        while True:
-            data = await ws.receive_json()
-            session_id = data.get("session_id", "default")
-            system_prompt = data.get("system_prompt", "")
-            tools_enabled = data.get("tools_enabled", True)
-            engine_override = data.get("engine_id", "")
-            agent_id = data.get("agent_id", "ceo")
-            selected_agents = data.get("selected_agents", [])
-
-            # If client specified agents, inject into system prompt
-            if selected_agents and len(selected_agents) > 0:
-                agent_list_str = ", ".join(selected_agents)
-                system_prompt = (system_prompt or "") + f"\n\nΟ ΧΡΗΣΤΗΣ ΕΠΕΛΕΞΕ ΤΟΥΣ ΑΚΟΛΟΥΘΟΥΣ AGENTS: {agent_list_str}. Χρησιμοποίησε ΜΟΝΟ αυτούς τους agents. Αν χρειαστείς βοήθεια, στείλε ΜΟΝΟ στους επιλεγμένους agents: {agent_list_str}. ΜΗΝ χρησιμοποιήσεις κανέναν άλλον agent."
-
-            def ws_send(msg):
-                msg["_aid"] = agent_id
-                msg["_sid"] = session_id.split(":", 1)[-1] if ":" in session_id else session_id
-                return ws.send_json(msg)
-
-            ctx = sessions.get(session_id)
-            if not ctx:
-                ctx = AgentContext(system_prompt, tools_enabled, agent_id=agent_id, session_id=session_id)
-                sessions[session_id] = ctx
-
-            ctx.add_message("user", data.get("message", ""))
-            bus.status(agent_id, True, "writing")
-            ws_start_time = time.time()
-
-            # Broadcast agent thinking on chat start
-            bus.broadcast({
-                "type": "agent_thinking",
-                "agent_id": agent_id,
-                "status": "started",
-                "thought": f"🤔 {agent_id}: επεξεργάζεται το μήνυμά σας...",
-                "ts": datetime.now().isoformat(),
-            })
-
-            if engine_override:
-                engines_to_try = [e for e in ENGINES if e["id"] == engine_override] or []
-                if not engines_to_try:
-                    engines_to_try = get_active_engines()
-            else:
-                task_type = "reasoning" if agent_id == "ceo" else ("simple" if not tools_enabled else "general")
-                suggested = suggest_engine_for(task_type, needs_tools=tools_enabled)
-                engines_to_try = get_active_engines(task_type=task_type, needs_tools=tools_enabled)
-                if suggested and suggested in engines_to_try:
-                    engines_to_try = [suggested] + [e for e in engines_to_try if e["id"] != suggested["id"]]
-                cached_id = session_engine_cache.get(session_id)
-                if cached_id:
-                    cached = next((e for e in ENGINES if e["id"] == cached_id), None)
-                    if cached and cached in engines_to_try:
-                        engines_to_try = [cached] + [e for e in engines_to_try if e["id"] != cached_id]
-
-            last_error = ""
-            response_text = ""
-            tool_calls_made = []
-            engine_used = "none"
-
-            for engine in engines_to_try:
-                if tools_enabled and not engine.get("supports_tools", False):
-                    continue
-                try:
-                    t0 = time.time()
-                    engine_used = engine["id"]
-                    await ws_send({"type": "status", "engine": engine["id"], "status": "calling"})
-                    bus.broadcast({
-                        "type": "engine_call",
-                        "engine_id": engine["id"],
-                        "agent_id": agent_id,
-                        "status": "started",
-                        "ts": datetime.now().isoformat(),
-                    })
-                    bus.broadcast({
-                        "type": "agent_thinking",
-                        "agent_id": agent_id,
-                        "status": "started",
-                        "thought": f"⏳ {agent_id}: επεξεργάζεται μέσω {engine['id']}...",
-                        "ts": datetime.now().isoformat(),
-                    })
-
-                    tools_for_call = get_tool_definitions_for_agent(agent_id) if tools_enabled else None
-
-                    init_resp = call_engine(engine, trim_messages(ctx.messages), tools=tools_for_call, stream=False)
-                    init_data = init_resp.json()
-                    init_choice = init_data["choices"][0]
-                    init_msg = init_choice["message"]
-                    init_content = init_msg.get("content", "")
-
-                    tool_calls = init_msg.get("tool_calls")
-                    if not tool_calls:
-                        from tools import parse_xml_tool_calls
-                        xml_tools, cleaned = parse_xml_tool_calls(init_content)
-                        if xml_tools:
-                            tool_calls = xml_tools
-                            init_content = cleaned
-
-                    if tool_calls:
-                        ctx.add_message("assistant", init_content, tool_calls=tool_calls)
-                        await ws_send({"type": "tool_calls", "tool_calls": tool_calls})
-
-                        total_tools = len(tool_calls)
-                        for ti, tc in enumerate(tool_calls):
-                            func_name = tc.get("function", {}).get("name", "")
-                            func_args = json.loads(tc.get("function", {}).get("arguments", "{}")) if tc.get("function", {}).get("arguments") else {}
-                            tc_id = tc.get("id", "")
-                            await ws_send({"type": "tool_start", "name": func_name, "args": func_args})
-                            bus.broadcast({
-                                "type": "task_progress",
-                                "agent_id": agent_id,
-                                "status": "running",
-                                "progress": min(int((ti + 1) / total_tools * 95), 95),
-                                "message": f"🔧 {func_name} ({ti+1}/{total_tools})",
-                                "ts": datetime.now().isoformat(),
-                            })
-                            bus.broadcast({
-                                "type": "agent_thinking",
-                                "agent_id": agent_id,
-                                "status": "thinking",
-                                "thought": f"💭 {agent_id}: εκτελεί {func_name} ({ti+1}/{total_tools})",
-                                "ts": datetime.now().isoformat(),
-                            })
-                            result = await asyncio.to_thread(execute_tool, func_name, func_args, ctx.agent_id)
-                            await ws_send({"type": "tool_result", "name": func_name, "result": result[:500]})
-                            ctx.add_message("tool", result, tool_call_id=tc_id)
-                            tool_calls_made.append({"name": func_name, "result": result[:200]})
-
-                        bus.broadcast({
-                            "type": "agent_thinking",
-                            "agent_id": agent_id,
-                            "status": "synthesizing",
-                            "thought": f"🧠 {agent_id}: συνθέτει αποτελέσματα...",
-                            "ts": datetime.now().isoformat(),
-                        })
-
-                        t2 = time.time()
-                        syn_type = "reasoning" if agent_id == "ceo" else task_type
-                        syn_resp = call_engine(engine, trim_messages(ctx.messages), stream=True, max_tokens=1024, task_type=syn_type)
-                        full_content = ""
-                        for line in syn_resp.iter_lines():
-                            if not line: continue
-                            if line.startswith(b"data: "):
-                                cs = line[6:].decode()
-                                if cs == "[DONE]": break
-                                try:
-                                    chunk = json.loads(cs)
-                                    d = chunk.get("choices", [{}])[0].get("delta", {})
-                                    if d.get("content"):
-                                        full_content += d["content"]
-                                        await ws_send({"type": "delta", "content": d["content"]})
-                                except: continue
-                        record_engine_perf(engine["id"], time.time() - t2, True)
-                        response_text = full_content
-                        ctx.add_message("assistant", full_content)
-                    else:
-                        await ws_send({"type": "delta", "content": init_content, "ts": datetime.now().isoformat()})
-                        ctx.add_message("assistant", init_content)
-                        response_text = init_content
-
-                    if needs_summary(ctx.messages):
-                        try:
-                            await summarize_conversation(call_engine, engine, trim_messages(ctx.messages), ctx.agent_id)
-                        except:
-                            pass
-                    bus.status(agent_id, False, "has_response")
-                    bus.broadcast({
-                        "type": "agent_thinking",
-                        "agent_id": agent_id,
-                        "status": "complete",
-                        "thought": f"✅ {agent_id} ολοκλήρωσε την απάντηση",
-                        "ts": datetime.now().isoformat(),
-                    })
-                    if tool_calls_made:
-                        bus.broadcast({
-                            "type": "task_progress",
-                            "agent_id": agent_id,
-                            "status": "complete",
-                            "progress": 100,
-                            "message": f"✅ {agent_id} completed",
-                            "ts": datetime.now().isoformat(),
-                        })
-                    bus.broadcast({
-                        "type": "agent_chat",
-                        "agent_id": agent_id,
-                        "session_id": session_id.split(":", 1)[-1] if ":" in session_id else session_id,
-                        "exchange": [
-                            {"role": "user", "content": data.get("message", ""), "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
-                            {"role": "assistant", "content": (response_text or "")[:3000], "_aid": agent_id, "_sid": session_id.split(":", 1)[-1] if ":" in session_id else session_id},
-                        ]
-                    })
-                    session_engine_cache[session_id] = engine_used
-                    await ws_send({"type": "done", "engine": engine_used, "tool_calls": tool_calls_made})
-                    try:
-                        from performance import log_performance
-                        perf_duration = time.time() - ws_start_time
-                        log_performance(agent_id, data.get("message",""), perf_duration, engine_used, True, tool_calls=len(tool_calls_made))
-                    except: pass
-                    break
-
-                except Exception as e:
-                    last_error = f"[{engine['id']}] {e}"
-                    record_engine_perf(engine["id"], 0, False)
-                    error_lower = str(e).lower()
-                    if "rate limit" in error_lower or "too large" in error_lower:
-                        mark_engine(engine["id"], "rate_limited", 300)
-                    elif "quota" in error_lower or "billing" in error_lower:
-                        mark_engine(engine["id"], "quota_exhausted", 7200)
-                    elif "timeout" in error_lower or "connection" in error_lower:
-                        mark_engine(engine["id"], "timeout", 120)
-                    continue
-            else:
-                bus.status(agent_id, False, "failure")
-                bus.broadcast({
-                    "type": "agent_thinking",
-                    "agent_id": agent_id,
-                    "status": "error",
-                    "thought": f"❌ {agent_id} απέτυχε: {last_error[:100]}",
-                    "ts": datetime.now().isoformat(),
-                })
-                await ws_send({"type": "error", "message": f"Σφάλμα σε όλα τα engines: {last_error}"})
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        try:
-            await ws_send({"type": "error", "message": str(e)[:500]})
-        except:
-            pass
-    finally:
-        active_connections.discard(ws)
-        try: ka_task.cancel()
-        except: pass
-        print(f"WS client disconnected: {client_id}")
-
-@app.websocket("/ws/collab")
-async def websocket_collab(ws: WebSocket):
-    await ws.accept()
-    bus.connections.add(ws)
-
-    async def _keepalive():
-        try:
-            while True:
-                await asyncio.sleep(25)
-                await ws.send_json({"type": "ka"})
-        except:
-            pass
-    ka_task = asyncio.create_task(_keepalive())
-
-    print("Collab WS connected")
-    try:
-        while True:
-            data = await ws.receive_text()
-            msg = json.loads(data)
-            if msg.get("type") == "ping":
-                await ws.send_json({"type": "pong"})
-    except:
-        pass
-    finally:
-        bus.connections.discard(ws)
-        try: ka_task.cancel()
-        except: pass
-        print("Collab WS disconnected")
-
-# Serve built frontend for remote access via ngrok
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
@@ -1353,7 +166,6 @@ else:
     print(f"Frontend dist not found at {FRONTEND_DIST}, run 'npm run build' in frontend/")
 
 if __name__ == "__main__":
-    # Ensure .env is loaded (redundant with engine._load_env but safe)
     from engine import _load_env as _engine_load_env
     _engine_load_env()
     import socket

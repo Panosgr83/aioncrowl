@@ -1,6 +1,7 @@
 import json, os, time, threading
 from datetime import datetime
 from config import AION_DIR, MEMORY_DIR, PERF_FILE, ENGINE_STATUS_FILE, DOTENV_FILE
+from engine_router import record_usage, tracker as token_tracker, DEFAULT_LIMITS
 
 ENGINE_LOCK = threading.Lock()
 
@@ -55,7 +56,7 @@ ENGINES = [
     {"id": "sambanova", "name": "SambaNova DeepSeek V3.1", "base_url": "https://api.sambanova.ai/v1", "model": "DeepSeek-V3.1",
      "priority": 9, "supports_tools": False, "max_tokens": 131072, "cooldown_until": 0, "headers": {},
      "capability": "medium", "speed_rating": "slow", "suitable_for": ["coding", "reasoning"]},
-    {"id": "openrouter_deepseek", "name": "DeepSeek V4 Flash (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-v4-flash:free",
+    {"id": "openrouter_deepseek", "name": "DeepSeek V4 Flash (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-v4-flash",
      "priority": 1, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
     {"id": "openrouter", "name": "OpenRouter Owl Alpha", "base_url": "https://openrouter.ai/api/v1", "model": "openrouter/owl-alpha",
@@ -73,9 +74,9 @@ ENGINES = [
     {"id": "gemini", "name": "Gemini 2.5 Flash", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash",
      "priority": 8, "supports_tools": True, "max_tokens": 8192, "cooldown_until": 0, "headers": {},
      "capability": "high", "speed_rating": "medium", "suitable_for": ["general", "reasoning", "tools"]},
-    {"id": "ollama", "name": "Ollama Qwen 2.5 14B", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:14b",
-     "priority": 9, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {},
-     "capability": "low", "speed_rating": "slow", "suitable_for": ["simple", "tools"]},
+      {"id": "ollama", "name": "Ollama Qwen 2.5 14B", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:14b",
+       "priority": 9, "supports_tools": True, "max_tokens": 16384, "status": "inactive", "cooldown_until": 0, "headers": {},
+       "capability": "low", "speed_rating": "slow", "suitable_for": ["simple", "tools"], "disabled": True},
     {"id": "openrouter_qwen", "name": "Qwen3 Next 80B (OpenRouter)", "base_url": "https://openrouter.ai/api/v1", "model": "qwen/qwen3-next-80b-a3b-instruct:free",
      "priority": 3, "supports_tools": True, "max_tokens": 65536, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "high", "speed_rating": "fast", "suitable_for": ["general", "coding", "reasoning", "tools"]},
@@ -86,6 +87,9 @@ ENGINES = [
      "priority": 8, "supports_tools": True, "max_tokens": 16384, "cooldown_until": 0, "headers": {"HTTP-Referer": "https://aion.gr", "X-Title": "AION"},
      "capability": "low", "speed_rating": "medium", "suitable_for": ["simple", "quick_tasks"]},
 ]
+
+# Remove permanently disabled engines
+ENGINES = [e for e in ENGINES if e.get("status") != "inactive"]
 
 def get_api_key(engine_id):
     key = os.environ.get(f"{engine_id.upper()}_API_KEY", "")
@@ -127,6 +131,7 @@ def record_engine_perf(engine_id, duration_s, success):
     if success:
         d["successes"] += 1
         _consecutive_failures[engine_id] = 0
+        record_usage(engine_id)  # track token usage
     else:
         d["failures"] += 1
         cf = _consecutive_failures.get(engine_id, 0) + 1
@@ -182,6 +187,18 @@ def get_engine_score(engine, task_type="general"):
     # Penalise free OpenRouter models that frequently hit daily limits
     if eid in ("openrouter_nemotron", "openrouter_qwen", "openrouter_gemma", "openrouter_llama"):
         score -= 2000  # tried LAST, after all other options exhausted
+    # Token quota penalty: reduce score as engines approach their daily limit
+    try:
+        usage = token_tracker.get_usage(eid)
+        pct = usage["pct"]
+        if pct >= 90:
+            score -= 5000  # almost exhausted, strongly deprioritize
+        elif pct >= 75:
+            score -= 2000  # getting close, reduce priority
+        elif pct >= 50:
+            score -= 500
+    except:
+        pass
     return score
 
 def suggest_engine_for(task_type="general", needs_tools=True):
@@ -189,6 +206,8 @@ def suggest_engine_for(task_type="general", needs_tools=True):
     best = None
     best_score = -1
     for e in ENGINES:
+        if e.get("status") == "inactive":
+            continue
         status = e.get("status", "active")
         if status not in ("active", None) and e.get("cooldown_until", 0) > now:
             continue
@@ -206,6 +225,8 @@ def get_active_engines(task_type=None, needs_tools=None):
     now = time.time()
     scored = []
     for e in ENGINES:
+        if e.get("status") == "inactive":
+            continue
         status = e.get("status", "active")
         if status not in ("active", None) and e.get("cooldown_until", 0) > now:
             continue
@@ -236,8 +257,13 @@ def load_engine_status():
                     s = status_map.get(e["id"], {})
                     status = s.get("status", "active")
                     cooldown = s.get("cooldown_until", 0)
-                    if status != "active" and cooldown <= now:
+                    if status not in ("active", "inactive") and cooldown <= now:
                         status = "active"
+                        cooldown = 0
+                        changed = True
+                    # Permanently inactive engines stay inactive regardless
+                    if e.get("status") == "inactive":
+                        status = "inactive"
                         cooldown = 0
                         changed = True
                     e["status"] = status
